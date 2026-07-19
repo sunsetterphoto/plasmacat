@@ -148,7 +148,8 @@ class Overlay(QWidget):
                          "puke", "wall_shelf", "box", "box_front",
                          "cat_door_0", "cat_door_1", "cat_door_2",
                          "fish", "drop", "zzz", "heart",
-                         "ball", "plush", "lure", "scratch_post", "cat_bed",
+                         "ball", "plush", "lure", "laser_dot", "scratch_post",
+                         "cat_bed",
                          "cat_grass", "litter_0", "litter_1", "litter_2",
                          "cat_tree", "wheel_stand", "wheel_rim", "wheel_front")
         }
@@ -353,8 +354,12 @@ class Overlay(QWidget):
                 continue
             if abs(toy.x) > 10000 or abs(toy.y) > 10000:
                 continue
-            pm = self._props["lure" if toy.kind == "string" else toy.kind]
-            if toy.kind == "string":
+            if toy.kind == "laser" and not toy.visible:
+                continue  # the dot blinked out after being caught (P34)
+            pm = self._props["lure" if toy.kind == "string"
+                             else "laser_dot" if toy.kind == "laser"
+                             else toy.kind]
+            if toy.kind in ("string", "laser"):  # center-aligned
                 rects.append(QRect(int(toy.x) - pm.width() // 2,
                                    int(toy.y) - pm.height() // 2,
                                    pm.width(), pm.height()))
@@ -636,6 +641,18 @@ class Overlay(QWidget):
         else:
             self.toys.remove("string")
 
+    def toggle_laser(self, on: bool) -> None:
+        """Tray toggle: the laser-pointer dot at the cursor (P34)."""
+        if on:
+            cx, cy = self.desktop.cursor
+            self.toys.spawn("laser", float(cx), float(cy))
+            self.cat.brain.sounds.append("chirp")  # get her attention
+        else:
+            self.toys.remove("laser")
+            if self.cat.brain.state in ("laser_chase", "laser_pounce"):
+                self.cat.brain.state = "idle"
+                self.cat.brain.state_left = 0.0
+
     def clear_toys(self) -> None:
         self.toys.toys.clear()
 
@@ -712,11 +729,17 @@ class Overlay(QWidget):
                 if not (math.isfinite(toy.x) and math.isfinite(toy.y)) \
                         or abs(toy.x) > 10000 or abs(toy.y) > 10000:
                     continue  # out-of-world toy: never crash the paint (P25)
+                if toy.kind == "laser" and not toy.visible:
+                    continue  # dot blinked out after a catch (P34)
                 if toy.kind == "string":
                     ax, ay = toy.anchor
                     p.setPen(QPen(QColor(240, 210, 90, 220), 2))
                     p.drawLine(int(ax), int(ay), int(toy.x), int(toy.y))
                     pm = self._props["lure"]
+                    p.drawPixmap(int(toy.x) - pm.width() // 2,
+                                 int(toy.y) - pm.height() // 2, pm)
+                elif toy.kind == "laser":
+                    pm = self._props["laser_dot"]
                     p.drawPixmap(int(toy.x) - pm.width() // 2,
                                  int(toy.y) - pm.height() // 2, pm)
                 else:

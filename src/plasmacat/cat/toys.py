@@ -1,4 +1,4 @@
-"""Toys: ball, plush mouse, string. Physics + cat interaction glue.
+"""Toys: ball, plush mouse, string, laser pointer. Physics + cat glue.
 
 Toys live on the overlay's floor/platforms like the cat. The ball can be
 batted by the cat (proximity + facing). The plush mouse and the string's lure
@@ -7,6 +7,7 @@ are pounce targets for the brain's play behavior. Pure python, no Qt.
 
 from __future__ import annotations
 
+import math
 import random
 
 from plasmacat.bridge.desktop import DesktopState
@@ -125,6 +126,43 @@ class String(Toy):
         return False
 
 
+class Laser(Toy):
+    """The laser-pointer dot (P34): no physics, it is light. Follows the
+    cursor with a springy lag plus hand tremble; 'escapes' (blinks out) for
+    a moment after being caught — the way real cats never catch the dot."""
+
+    kind = "laser"
+
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x, y)
+        self._bx, self._by = x, y   # springed base (tremble is added on top)
+        self._t = 0.0
+        self._escape_t = 0.0
+
+    @property
+    def visible(self) -> bool:
+        return self._escape_t <= 0
+
+    def escape(self) -> None:
+        self._escape_t = 0.8  # blink out briefly after being 'caught'
+
+    def tick_physics(self, dt: float, desktop: DesktopState) -> bool:
+        self._t += dt
+        self._escape_t = max(0.0, self._escape_t - dt)
+        tx, ty = desktop.cursor
+        if not self.visible:
+            self._bx, self._by = tx, ty  # reappear right at the cursor
+            self.x, self.y = tx, ty
+            return False
+        k = 14.0  # springy follow lag
+        self._bx += (tx - self._bx) * min(1.0, k * dt)
+        self._by += (ty - self._by) * min(1.0, k * dt)
+        # bounded hand tremble around the base
+        self.x = self._bx + 2.2 * math.sin(self._t * 9.0)
+        self.y = self._by + 1.6 * math.cos(self._t * 11.0)
+        return False
+
+
 class ToyManager:
     def __init__(self, rng: random.Random | None = None) -> None:
         self.toys: list[Toy] = []
@@ -132,10 +170,10 @@ class ToyManager:
         self._time = 0.0
 
     def spawn(self, kind: str, x: float, y: float) -> Toy:
-        cls = {"ball": Ball, "plush": Plush, "string": String}[kind]
-        # remove an existing string before adding a new one
-        if kind == "string":
-            self.toys = [t for t in self.toys if t.kind != "string"]
+        cls = {"ball": Ball, "plush": Plush, "string": String, "laser": Laser}[kind]
+        # only one string / one laser dot at a time
+        if kind in ("string", "laser"):
+            self.toys = [t for t in self.toys if t.kind != kind]
         toy = cls(x, y)
         self.toys.append(toy)
         return toy

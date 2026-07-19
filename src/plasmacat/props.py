@@ -264,6 +264,18 @@ LURE = [
     "......",
 ]
 
+LASER_DOT = [
+    "..........",
+    "....oo....",
+    "..orrrro..",
+    ".orrwwrro.",
+    ".orwwwwro.",
+    ".orrwwrro.",
+    "..orrrro..",
+    "....oo....",
+    "..........",
+]
+
 # ---------------------------------------------------------------------------
 # Furniture (built): sized to the cat (64x48 sprite @ 2x = 128x96 px)
 # ---------------------------------------------------------------------------
@@ -391,6 +403,7 @@ PROPS: dict[str, list[str]] = {
     "ball": BALL,
     "plush": PLUSH_MOUSE,
     "lure": LURE,
+    "laser_dot": LASER_DOT,
     "scratch_post": _scratch_post(),
     "cat_bed": _cat_bed(),
     "cat_grass": _cat_grass(),

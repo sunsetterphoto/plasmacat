@@ -28,7 +28,9 @@ attached to you over time.
   cursor).
 - **Customizable**: first-run wizard for name, fur color, pattern (solid,
   tabby, tuxedo, spots, tortie), eyes and collar — recolorable anytime.
-- **Stuff to play with**: ball (bouncy physics), plush mouse, string — plus
+- **Stuff to play with**: ball (bouncy physics), plush mouse, string — and a
+  **laser pointer**: a red dot follows your cursor; she chases, wiggles and
+  pounces but never truly catches it (great for luring her to a spot). Plus
   furniture: scratching post, cat bed, cat grass, litter box (you empty it),
   big cat tree, exercise wheel, floating wall shelves, and a cardboard box
   she hides in to ambush you.

@@ -52,6 +52,7 @@ BACK_COMMITTED = frozenset({
 FRONT_COMMITTED = frozenset({
     "wander", "chase", "hunt_stalk", "hunt_pounce", "to_toy", "pounce_toy",
     "follow", "to_gift", "carry_gift", "greet", "hop_walk", "zoomies",
+    "laser_chase", "laser_pounce",
 })
 
 SLEEP_REGEN = 100 / 900.0       # energy refills in 15 min of sleep
@@ -170,9 +171,17 @@ class Brain:
         # time, not a per-frame derivation (no more chaotic flip-flopping)
         self._level = "front"
         self._level_t = LEVEL_DWELL_S    # allow the first commit immediately
+        # P34: laser pointer sessions
+        self._laser_cd = 0.0             # cooldown after a chase session
 
     def _is_sleep_state(self) -> bool:
         return self.state in ("sleep", "sleep_belly")
+
+    def _laser(self):
+        """The laser-pointer dot toy, if the user switched it on (P34)."""
+        if not self.toys:
+            return None
+        return next((t for t in self.toys.toys if t.kind == "laser"), None)
 
     # -- needs & attachment ---------------------------------------------------
 
@@ -320,7 +329,8 @@ class Brain:
                           "litter_cover", "to_litter", "zoomies", "wheel_run",
                           "scratching", "nibbling", "knead", "yawn", "stretch",
                           "wiggle", "retch", "to_box", "to_box_air", "box_hide",
-                          "to_gift", "carry_gift", "prep_jump", "land"):
+                          "to_gift", "carry_gift", "prep_jump", "land",
+                          "laser_chase", "laser_pounce"):
             return
         if self.needs["play"] < 15:
             return
@@ -464,6 +474,13 @@ class Brain:
             if not desktop.cursor_active:
                 return 0.0
             return 0.15 * _act_m
+        if name == "laser_chase":
+            # irresistible — but real needs still win, and she needs steam
+            if not desktop.cursor_active or self._laser() is None:
+                return 0.0
+            if self._laser_cd > 0 or n["energy"] < 25 or n["play"] < 10:
+                return 0.0
+            return 0.85
         if name == "wander":
             if self.wander_cooldown > 0:
                 return 0.0
@@ -484,7 +501,8 @@ class Brain:
         self._circ = circadian()
         names = ["sleep", "beg", "hop", "chase", "cuddle", "eat", "drink",
                  "play_toy", "scratch", "nibble", "litter", "exercise", "watch",
-                 "wander", "groom", "sit", "loaf", "hide", "follow", "gift"]
+                 "wander", "groom", "sit", "loaf", "hide", "follow", "gift",
+                 "laser_chase"]
         if force_level or self._level_t < LEVEL_DWELL_S:
             # mid-dwell (or a forced redirect): only same-level + neutral
             # activities — she stays put and does something new there (P28)
@@ -492,7 +510,7 @@ class Brain:
             on_furn = plat is not None and plat.caption in LEVEL_BACK_CAPTIONS
             on_window = plat is not None and not plat.floor and not on_furn
             if self._level == "back":
-                drop = {"chase", "follow", "gift", "play_toy"}
+                drop = {"chase", "follow", "gift", "play_toy", "laser_chase"}
                 if not on_furn:
                     drop.add("wander")
             else:
@@ -519,6 +537,7 @@ class Brain:
         self._food_beg_cd = max(0.0, self._food_beg_cd - dt)
         self._water_beg_cd = max(0.0, self._water_beg_cd - dt)
         self._grass_recent = max(0.0, self._grass_recent - dt)
+        self._laser_cd = max(0.0, self._laser_cd - dt)
         self._neglect_s += dt  # reset by any user attention (stroke/rub/treat)
         self.state_left -= dt
         # a window wall stopped the walk (set by physics): cool down instead
@@ -739,6 +758,11 @@ class Brain:
         elif name == "follow":
             self.state_left = self.rng.uniform(6, 12)
             self._fx_t = 0.0
+        elif name == "laser_chase":
+            # the human waves the dot: come forward immediately (P34)
+            self._force_level_ready()
+            self.state_left = self.rng.uniform(20, 45)  # session length
+            self.log.append("LASER!")
         elif name == "gift":
             toy = next((t for t in self.toys.toys if t.kind == "plush"), None)
             if toy is None:
@@ -1282,7 +1306,9 @@ class Brain:
                     self.state = "idle"
                     self.state_left = 0.0
                 elif body.jump_to(nxt[1], nxt[2]):
-                    self.state = "hunt_pounce" if nxt[0] == "hunt" else "pounce_toy"
+                    self.state = ("hunt_pounce" if nxt[0] == "hunt"
+                                  else "laser_pounce" if nxt[0] == "laser"
+                                  else "pounce_toy")
                     self.state_left = 4.0
                 else:
                     self.state = "idle" if nxt[0] == "hunt" else "sit"
@@ -1356,6 +1382,57 @@ class Brain:
                 body.stop()
                 self.state = "sit"
                 self.state_left = 2.0
+        elif self.state == "laser_chase":
+            laser = self._laser()
+            if laser is None or not desktop.cursor_active:
+                body.stop()
+                self.state = "idle"
+                self.state_left = 0.0
+            elif self.needs["energy"] < 25:
+                # out of steam: she gives up on the uncatchable dot (P34)
+                body.stop()
+                self.state = "sit"
+                self.state_left = 3.0
+                self._laser_cd = 60.0
+                self.log.append("too tired for the laser")
+            else:
+                # chasing the dot is a workout
+                self.needs["energy"] = max(0.0, self.needs["energy"] - 2.0 * dt)
+                self.gain("play", 3.0 * dt)
+                dist = abs(laser.x - body.x)
+                body.facing = 1 if laser.x >= body.x else -1
+                if body.target_x is None:
+                    plat = desktop.platform_below(laser.x, desktop.screen_h)
+                    if dist < 55:
+                        # in striking range: wiggle, then pounce on the dot
+                        tx = min(max(laser.x, plat.x0 + 90), plat.x1 - 90)
+                        self._wiggle_then = ("laser", tx, plat.y)
+                        self.state = "wiggle"
+                        self.state_left = 0.5
+                    else:
+                        lo, hi = self._walk_range(plat)
+                        off = 70 * (-1 if laser.x < body.x else 1)
+                        spd = RUN_SPEED if dist > 150 else WALK_SPEED
+                        body.walk_to(min(max(laser.x + off, lo), hi), spd)
+                if self.state_left <= 0:
+                    body.stop()
+                    self.state = "idle"
+                    self.state_left = 0.0
+                    self._laser_cd = 45.0   # she needs a break from the dot
+        elif self.state == "laser_pounce":
+            if not body.airborne:
+                laser = self._laser()
+                caught = laser is not None and abs(laser.x - body.x) < 60
+                if caught:
+                    # GOT IT — well, almost: the dot blinks out and reappears
+                    laser.escape()
+                    self.gain("play", 10)
+                    self.gain("affection", 1)
+                    self.add_xp(2.0, "caught the dot")
+                    self.sounds.append("boing")
+                    self.log.append("caught the laser dot!")
+                self.state = "laser_chase"
+                self.state_left = self.rng.uniform(8, 15)
         elif self.state == "to_gift":
             if self._gift_toy is None or self._gift_toy not in self.toys.toys:
                 self._gift_toy = None
