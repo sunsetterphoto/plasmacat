@@ -1,0 +1,14 @@
+[project]
+name = "plasmacat"
+version = "0.1.0"
+description = "Desktop companion cat for KDE Plasma (pixel-art virtual pet)"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6-Essentials>=6.6",
+    "PySide6-Addons>=6.6",
+    "numpy>=1.26",
+    "pillow>=10.0",
+]
+
+[project.scripts]
+plasmacat = "plasmacat.main:main"

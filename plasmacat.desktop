@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PlasmaCat
+Comment=Desktop companion cat (pixel-art virtual pet)
+Exec=plasmacat
+Icon=plasmacat
+Terminal=false
+Categories=Game;Simulation;
+StartupWMClass=plasmacat

@@ -1,0 +1,5 @@
+# PlasmaCat public repo ignores
+.venv/
+__pycache__/
+*.pyc
+kwin/*.runtime.js
