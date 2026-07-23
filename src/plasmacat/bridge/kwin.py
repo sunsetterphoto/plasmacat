@@ -1,10 +1,11 @@
 """Bridge to KWin: loads the helper KWin script and hosts the DBus service it calls.
 
 The KWin script (kwin/plasmacat-bridge.js) pushes data to us via callDBus:
-  SetCursor("x,y")      -> cursorChanged(int, int)     (~30 Hz while moving)
-  SetWindows("[...]")   -> windowsChanged(list[dict])  (on any window change)
-  SetWorkArea("{...}")  -> workAreaChanged(dict)       (screen minus panels)
-  OverlayTagged("...")  -> overlayTagged(str)          (our overlay got keepAbove etc.)
+  SetCursor("x,y")       -> cursorChanged(int, int)     (~30 Hz while moving)
+  SetWindows("[...]")    -> windowsChanged(list[dict])  (on any window change)
+  SetWorkAreas("[...]")  -> workAreasChanged(list[dict]) (one work area per screen, P38)
+  SetWorkArea("{...}")   -> workAreaChanged(dict)       (legacy single-area form)
+  OverlayTagged("...")   -> overlayTagged(str)          (our overlay got keepAbove etc.)
 All DBus arguments are single strings (DECISIONS.md D3).
 
 IMPORTANT (DECISIONS.md D10): the DBus interface name QtDBus auto-generates for a
@@ -35,6 +36,7 @@ class BridgeService(QObject):
     cursorChanged = Signal(int, int)
     windowsChanged = Signal(list)
     workAreaChanged = Signal(dict)
+    workAreasChanged = Signal(list)
     overlayTagged = Signal(str)
 
     @Slot(str)
@@ -64,6 +66,17 @@ class BridgeService(QObject):
             self.workAreaChanged.emit(data)
 
     @Slot(str)
+    def SetWorkAreas(self, payload: str) -> None:
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if isinstance(data, list) and data and all(
+                isinstance(a, dict) and {"x", "y", "w", "h"} <= a.keys()
+                for a in data):
+            self.workAreasChanged.emit(data)
+
+    @Slot(str)
     def OverlayTagged(self, caption: str) -> None:
         self.overlayTagged.emit(caption)
 
@@ -78,6 +91,7 @@ class KWinBridge(QObject):
         self.cursorChanged = self.service.cursorChanged
         self.windowsChanged = self.service.windowsChanged
         self.workAreaChanged = self.service.workAreaChanged
+        self.workAreasChanged = self.service.workAreasChanged
         self.overlayTagged = self.service.overlayTagged
         self._scripting = QDBusInterface(
             "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"
@@ -108,12 +122,19 @@ class KWinBridge(QObject):
         script = self._render_script(bus)
         if script is None:
             return False
-        reply = self._scripting.call("loadScript", script, SCRIPT_PLUGIN)
-        if reply.arguments() and int(reply.arguments()[0]) < 0:
-            # A leftover script with our name (e.g. after a crash) blocks loading.
-            self._scripting.call("unloadScript", SCRIPT_PLUGIN)
+        reply = None
+        args: list = []
+        for _attempt in range(3):
             reply = self._scripting.call("loadScript", script, SCRIPT_PLUGIN)
-        args = reply.arguments()
+            if reply.arguments() and int(reply.arguments()[0]) < 0:
+                # A leftover script with our name (e.g. after a crash) blocks loading.
+                self._scripting.call("unloadScript", SCRIPT_PLUGIN)
+                reply = self._scripting.call("loadScript", script, SCRIPT_PLUGIN)
+            args = reply.arguments()
+            if args and int(args[0]) >= 0:
+                break
+            # KWin may still be initializing (autostart right after login, P36)
+            QThread.msleep(500)
         self._loaded = bool(args) and int(args[0]) >= 0
         if self._loaded:
             # loadScript only registers the script; start() actually runs it.

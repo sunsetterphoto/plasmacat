@@ -11,11 +11,45 @@ First run (no save file) opens the customization wizard. State is saved to
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "kwin" / "plasmacat-bridge.js"
+DESKTOP_FILE = ROOT / "plasmacat.desktop"
+
+
+def _xdg_dir(location) -> Path:
+    from PySide6.QtCore import QStandardPaths
+    return Path(QStandardPaths.writableLocation(location))
+
+
+def _autostart_path() -> Path:
+    from PySide6.QtCore import QStandardPaths
+    return _xdg_dir(QStandardPaths.StandardLocation.ConfigLocation) / \
+        "autostart" / "plasmacat.desktop"
+
+
+def autostart_enabled() -> bool:
+    return _autostart_path().exists()
+
+
+def set_autostart(enabled: bool) -> None:
+    """Tray 'Start at login': install/remove the XDG autostart entry.
+    Enabling also installs the app launcher (fixes the portal warning)."""
+    from PySide6.QtCore import QStandardPaths
+    if enabled:
+        target = _autostart_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DESKTOP_FILE, target)
+        apps = _xdg_dir(QStandardPaths.StandardLocation.ApplicationsLocation) / \
+            "plasmacat.desktop"
+        if not apps.exists():
+            apps.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(DESKTOP_FILE, apps)
+    else:
+        _autostart_path().unlink(missing_ok=True)
 
 
 def _bar(value: float) -> str:
@@ -75,14 +109,12 @@ def main() -> int:
     pack_dir = data_dir / "sounds" / "retro"
     build_pack(pack_dir)
     # natural pack ships in the repo (assets/) and is copied on first run
-    import shutil as _shutil
-
     natural_src = ROOT / "assets" / "sounds" / "natural"
     natural_dst = data_dir / "sounds" / "natural"
     natural_dst.mkdir(parents=True, exist_ok=True)
     for f in natural_src.glob("*.*"):
         if not (natural_dst / f.name).exists():
-            _shutil.copy2(f, natural_dst / f.name)
+            shutil.copy2(f, natural_dst / f.name)
     player = SoundPlayer(data_dir / "sounds", pack=cust.sound_pack,
                          muted=not cust.sound_on, volume=cust.volume)
 
@@ -107,6 +139,7 @@ def main() -> int:
         brain.grass_charges = state.grass_charges
         brain.litter_x = state.litter_x
         brain.litter_fill = state.litter_fill
+        brain.litter_deposits = list(state.litter_deposits)
         brain.tree_x = state.tree_x
         brain.wheel_x = state.wheel_x
         brain.box_x = state.box_x
@@ -122,8 +155,8 @@ def main() -> int:
                 # broken builds (corner jams, the below-the-floor void bug)
                 x = min(max(float(t.get("x", 400)), overlay.desktop.floor_x0 + 80),
                         overlay.desktop.floor_x1 - 80)
-                y = min(max(float(t.get("y", overlay.desktop.floor_y)), 0.0),
-                        overlay.desktop.floor_y)
+                fy = overlay.desktop.floor_y_at(x)  # the toy's own screen (P38)
+                y = min(max(float(t.get("y", fy)), 0.0), fy)
                 overlay.toys.spawn(t["kind"], x, y)
 
     # -- saving ---------------------------------------------------------------
@@ -146,6 +179,7 @@ def main() -> int:
             grass_charges=brain.grass_charges,
             litter_x=brain.litter_x,
             litter_fill=brain.litter_fill,
+            litter_deposits=list(brain.litter_deposits),
             tree_x=brain.tree_x,
             wheel_x=brain.wheel_x,
             box_x=brain.box_x,
@@ -191,6 +225,15 @@ def main() -> int:
     treat_action = QAction("Give treat", menu)
     treat_action.triggered.connect(brain.on_treat)
     menu.addAction(treat_action)
+
+    status_win_action = QAction("Status window", menu)
+    status_win_action.setCheckable(True)
+    status_win_action.setChecked(cust.status_window)
+    status_win_action.toggled.connect(overlay.set_status_window)
+    menu.addAction(status_win_action)
+    overlay._status_action = status_win_action
+    if cust.status_window:
+        overlay.set_status_window(True)
 
     toys_menu = menu.addMenu("Toys")
     for label, kind in (("Place ball…", "ball"),
@@ -311,6 +354,7 @@ def main() -> int:
         wiz = SetupWizard(overlay.cust)
         if wiz.exec() == QDialog.DialogCode.Accepted:
             c = wiz.result_customization()
+            c.status_window = overlay.cust.status_window  # keep the P39 toggle
             overlay.set_customization(c)
             player.set_muted(not c.sound_on)
             player.set_volume(c.volume)
@@ -337,6 +381,12 @@ def main() -> int:
 
     reset_action.triggered.connect(reset_cat)
     menu.addAction(reset_action)
+
+    login_action = QAction("Start at login", menu)
+    login_action.setCheckable(True)
+    login_action.setChecked(autostart_enabled())
+    login_action.toggled.connect(set_autostart)
+    menu.addAction(login_action)
     menu.addSeparator()
 
     quit_action = QAction("Quit PlasmaCat", menu)

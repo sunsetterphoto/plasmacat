@@ -1,8 +1,9 @@
-"""Desktop world state: cursor, work area, and the platforms the cat can stand on.
+"""Desktop world state: cursor, work areas, and the platforms the cat can stand on.
 
-Platforms are the work-area floor (screen minus panels, reported by the KWin
-bridge via clientArea(WorkArea)) plus the top edges of visible normal windows.
-Bogus micro-windows (DECISIONS.md D11) are filtered by size.
+Platforms are the per-screen work-area floors (screens minus panels, reported
+by the KWin bridge via clientArea(WorkArea) per output — P38) plus the top
+edges of visible normal windows. Bogus micro-windows (DECISIONS.md D11) are
+filtered by size. With a single screen there is exactly one work area.
 """
 
 from __future__ import annotations
@@ -31,7 +32,10 @@ class DesktopState:
     def __init__(self, screen_w: int, screen_h: int) -> None:
         self.screen_w = screen_w
         self.screen_h = screen_h
-        self.work_area = (0, 0, screen_w, screen_h)  # x, y, w, h (pre-bridge default)
+        # P38: one work area per screen (bridge sends them in KWin order,
+        # active screen first). Single screen: exactly one entry, as before.
+        self.work_areas: list[tuple[float, float, float, float]] = [
+            (0.0, 0.0, float(screen_w), float(screen_h))]
         self.cursor: tuple[int, int] = (-100, -100)
         self.cursor_active: bool = False   # moved within the last ~2 s (set by overlay)
         self.cursor_speed: float = 0.0     # px/s, from the overlay's CursorTracker
@@ -43,21 +47,66 @@ class DesktopState:
     # -- work area ------------------------------------------------------------
 
     @property
+    def work_area(self) -> tuple[float, float, float, float]:
+        """The primary screen's work area (first entry, active screen)."""
+        return self.work_areas[0]
+
+    @property
     def floor_y(self) -> float:
-        return self.work_area[1] + self.work_area[3]
+        a = self.work_areas[0]
+        return a[1] + a[3]
 
     @property
     def floor_x0(self) -> float:
-        return self.work_area[0]
+        return min(a[0] for a in self.work_areas)
 
     @property
     def floor_x1(self) -> float:
-        return self.work_area[0] + self.work_area[2]
+        return max(a[0] + a[2] for a in self.work_areas)
+
+    def floor_y_at(self, x: float) -> float:
+        """Bottom edge of the work area containing x (P38). In a gap between
+        screens: the nearest area's bottom (safety-net semantics)."""
+        best: float | None = None
+        best_d = 1e18
+        for ax, ay, aw, ah in self.work_areas:
+            if ax <= x <= ax + aw:
+                return ay + ah
+            d = min(abs(x - ax), abs(x - ax - aw))
+            if d < best_d:
+                best, best_d = ay + ah, d
+        return best if best is not None else self.floor_y
+
+    def floor_platform_at(self, x: float, ref_y: float | None = None,
+                          margin: float = 0.0) -> Platform | None:
+        """The floor platform under x, or None in a gap between screens.
+        Overlapping seams resolve to the one nearest ref_y (P38)."""
+        cands = [p for p in self.platforms if p.floor and p.contains_x(x, margin)]
+        if not cands:
+            return None
+        if ref_y is None:
+            return cands[0]
+        return min(cands, key=lambda p: abs(p.y - ref_y))
+
+    def nearest_floor(self, x: float, y: float) -> Platform:
+        """Closest floor platform to (x, y) — the safety-net landing for
+        falls into gaps between screens (P38)."""
+        floors = [p for p in self.platforms if p.floor]
+
+        def dist(p: Platform) -> tuple[float, float]:
+            dx = 0.0 if p.contains_x(x) else min(abs(x - p.x0), abs(x - p.x1))
+            return (dx, abs(p.y - y))
+
+        return min(floors, key=dist)
 
     def set_work_area(self, d: dict) -> None:
-        wa = (float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"]))
-        if wa != self.work_area:
-            self.work_area = wa
+        self.set_work_areas([d])
+
+    def set_work_areas(self, areas: list[dict]) -> None:
+        wa = tuple((float(a["x"]), float(a["y"]), float(a["w"]), float(a["h"]))
+                    for a in areas)
+        if wa and wa != self.work_areas:
+            self.work_areas = wa
             self._rebuild_platforms()
 
     # -- inputs -----------------------------------------------------------------
@@ -77,7 +126,8 @@ class DesktopState:
     # -- platforms --------------------------------------------------------------
 
     def _rebuild_platforms(self) -> None:
-        plats = [Platform(self.floor_x0, self.floor_x1, self.floor_y, "floor", True)]
+        plats = [Platform(ax, ax + aw, ay + ah, "floor", True)
+                 for ax, ay, aw, ah in self.work_areas]
         wins = [w for w in self._windows
                 if w["w"] >= MIN_WINDOW_W and w["h"] >= MIN_WINDOW_H and w["y"] >= MIN_TOP_Y]
         # stacking order: later windows cover earlier ones (KWin stackingOrder)
@@ -127,9 +177,13 @@ class DesktopState:
 
     def platform_below(self, x: float, y: float) -> Platform:
         """The platform the cat at (x, y) would land on: highest top edge that
-        is at or below y and spans x. The floor always matches."""
-        best = self.platforms[-1]  # floor (largest y after sorting)
+        is at or below y and spans x. With several screens (P38) the CONTAINING
+        match must win — two floors can share the same height, and the fallback
+        is the world's lowest floor."""
+        best: Platform | None = None
         for p in self.platforms:
-            if p.y >= y and p.contains_x(x) and p.y < best.y:
+            if p.y >= y and p.contains_x(x) and (best is None or p.y < best.y):
                 best = p
-        return best
+        if best is not None:
+            return best
+        return self.platforms[-1]  # lowest platform overall (a floor in practice)

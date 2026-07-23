@@ -1,9 +1,16 @@
-"""Fullscreen, transparent, click-through overlay: the game canvas.
+"""Small, transparent, click-through overlay window: the game canvas (P37).
+
+The window covers just the bounding box of the front-layer content (cat,
+bubble, cat door, toys) instead of the whole screen — the fullscreen
+translucent surface cost a native buffer copy per repaint (DECISIONS.md D17).
+Wayland clients cannot position themselves, so the desired rect is encoded in
+the window title ('plasmacat@x,y,w,h') and the KWin helper script applies it
+(frameGeometry is read-write there). Placement mode temporarily goes
+fullscreen (plain title: the script leaves the window alone).
 
 Runs the simulation loop (QTimer ~60 fps), draws the cat (pixel-art sprite),
-the food/water bowls and the cat's thought bubble, plays sound intents from
-the brain, and repaints only dirty regions. Debug mode (--debug) draws
-platform top edges.
+the toys and the cat's thought bubble, plays sound intents from the brain,
+and repaints only dirty regions. Debug mode (--debug) draws platform top edges.
 """
 
 from __future__ import annotations
@@ -25,15 +32,25 @@ from plasmacat.persist import Customization
 SCALE_MIN = 2
 FPS_MS = 16
 
+# P37 small-window policy (see module docstring)
+WIN_MIN_W = 240
+WIN_MIN_H = 180
+WIN_MARGIN = 24         # breathing room around the content bbox
+WIN_SHRINK_DELAY = 5.0  # seconds of small content before the window shrinks
+WIN_SHRINK_FRAC = 0.6   # … to below this fraction of the window size
+
 
 class FurnitureLayer(QWidget):
     """Desktop-level layer rendered BEHIND all windows (keepBelow, tagged by
-    the bridge via its window title): bowls and static furniture. Repainted
+    the bridge via its window title): bowls and static furniture. One instance
+    per screen (P38), each showing the world slice of its screen. Repainted
     only when its content changes."""
 
-    def __init__(self, overlay: "Overlay", parent=None) -> None:
+    def __init__(self, overlay: "Overlay", screen, parent=None) -> None:
         super().__init__(parent)
         self.o = overlay
+        self._ox = screen.geometry().x()   # the screen's world position (P38)
+        self._oy = screen.geometry().y()
         self.setWindowTitle("plasmacat-furniture")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -42,6 +59,9 @@ class FurnitureLayer(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.winId()  # realize so windowHandle() exists for setScreen
+        if self.windowHandle() is not None:
+            self.windowHandle().setScreen(screen)
         self.showFullScreen()
 
     def refresh(self) -> None:
@@ -57,20 +77,29 @@ class FurnitureLayer(QWidget):
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
             p.fillRect(event.rect(), QColor(0, 0, 0, 0))
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            # everything below is drawn in world coordinates, translated by
+            # this screen's world position (P38)
+            p.translate(-self._ox, -self._oy)
+            region = event.rect().translated(self._ox, self._oy)
             # 1. static furniture (bowls, post, tree, bed, grass, litter, box…)
             for name, x in ((n, fx) for fx, n in o._floor_props()):
                 br = o._bowl_rect(x, name)
-                if event.rect().intersects(br):
+                if region.intersects(br):
                     p.drawPixmap(br.x(), br.y(), o._props[name])
             # 1b. floating wall shelves (P25): fixed to the 'wall', any height
             for sr in o._shelf_rects():
-                if event.rect().intersects(sr):
+                if region.intersects(sr):
                     p.drawPixmap(sr.x(), sr.y(), o._props["wall_shelf"])
+            # 1c. litter deposits (P40): every poop/pee visible in the tray
+            for dr, kind in o._litter_deposit_rects():
+                if region.intersects(dr):
+                    pm = o._props["litter_poop" if kind == "poop" else "litter_pee"]
+                    p.drawPixmap(dr.x(), dr.y(), pm)
             # 2. exercise wheel: static stand, then rim rotating around the axle —
             #    the full illusion lives on THIS layer (P23)
             if o.cat.brain.wheel_x is not None:
                 wr = o._wheel_rect()
-                if event.rect().intersects(wr):
+                if region.intersects(wr):
                     cxm = wr.x() + 32 * o.prop_scale   # rim center (canvas 32,34)
                     cym = wr.y() + 34 * o.prop_scale
                     p.drawPixmap(wr.x(), wr.y(), o._props["wheel_stand"])
@@ -91,11 +120,11 @@ class FurnitureLayer(QWidget):
             # 4. wheel front arc / box front wall over the cat (inside illusion)
             if o.cat.brain.wheel_x is not None:
                 wr = o._wheel_rect()
-                if event.rect().intersects(wr):
+                if region.intersects(wr):
                     p.drawPixmap(wr.x(), wr.y(), o._props["wheel_front"])
             if o.cat.brain.box_x is not None:
                 br2 = o._box_rect()
-                if event.rect().intersects(br2):
+                if region.intersects(br2):
                     p.drawPixmap(br2.x(), br2.y(), o._props["box_front"])
         except Exception as exc:
             print(f"[paint] furniture layer error: {exc!r}")
@@ -151,6 +180,7 @@ class Overlay(QWidget):
                          "ball", "plush", "lure", "laser_dot", "scratch_post",
                          "cat_bed",
                          "cat_grass", "litter_0", "litter_1", "litter_2",
+                         "litter_poop", "litter_pee",
                          "cat_tree", "wheel_stand", "wheel_rim", "wheel_front")
         }
         self._wheel_angle = 0.0
@@ -168,12 +198,20 @@ class Overlay(QWidget):
         self._door: tuple[float, float, float, str] | None = None  # P27
         self._move_ticks = 0               # P32 full-flush cadence
         self._prev_moving = False
+        self._win_x = 0                    # P37: window's world position
+        self._win_y = 0                    # (applied by KWin, not by us)
+        self._shrink_since: float | None = None
+        self._status_win = None            # P39: optional status panel
         self.notify = None  # optional callback(title, msg) set by the tray
-        self.furniture_layer = FurnitureLayer(self)
+        self.furniture_layers = [FurnitureLayer(self, s)
+                                 for s in QGuiApplication.screens()]
+        QGuiApplication.instance().screenAdded.connect(self._screens_changed)
+        QGuiApplication.instance().screenRemoved.connect(self._screens_changed)
 
         bridge.cursorChanged.connect(self._on_cursor)
         bridge.windowsChanged.connect(self.desktop.set_windows)
         bridge.workAreaChanged.connect(self._on_work_area)
+        bridge.workAreasChanged.connect(self._on_work_areas)
 
         # NOTE: the detector owns the single CursorTracker — feed it, not a copy.
         self._detector = InteractionDetector()
@@ -184,7 +222,9 @@ class Overlay(QWidget):
         self._clock.start()
         self._timer.start(FPS_MS)
 
-        self.showFullScreen()
+        self.resize(WIN_MIN_W * 2, WIN_MIN_H * 2)
+        self.show()
+        self._sync_window_geometry(force=True)
 
     # -- customization ---------------------------------------------------------
 
@@ -202,15 +242,39 @@ class Overlay(QWidget):
         self.update()
 
     def _on_work_area(self, d: dict) -> None:
-        self.desktop.set_work_area(d)
+        self._on_work_areas([d])
+
+    def _on_work_areas(self, areas: list[dict]) -> None:
+        self.desktop.set_work_areas(areas)
         if self.debug:
-            print(f"[dbg] work area -> {d}")
+            print(f"[dbg] work areas -> {areas}")
         # keep the bowls anchored to the work-area corner
         self.cat.brain.food_x = self.desktop.floor_x0 + 110.0
         self.cat.brain.water_x = self.desktop.floor_x0 + 200.0
         # floor_y may have moved (panel resized/Plasma restart): the furniture
         # platforms must follow or the cat floats beside the bed/wheel (P24)
         self._sync_furniture_platforms()
+
+    def _screens_changed(self, _screen) -> None:
+        """A monitor was (un)plugged: rebuild the furniture layers so each
+        screen has exactly one (P38). The bridge sends the new work areas."""
+        for layer in self.furniture_layers:
+            layer.hide()
+            layer.deleteLater()
+        self.furniture_layers = [FurnitureLayer(self, s)
+                                 for s in QGuiApplication.screens()]
+        self._furn_update_all()
+
+    def _furn_update(self, world_rect: QRect) -> None:
+        """Repaint a world-coords region on every furniture layer it touches."""
+        for layer in self.furniture_layers:
+            cov = QRect(layer._ox, layer._oy, layer.width(), layer.height())
+            if cov.intersects(world_rect):
+                layer.update(world_rect.translated(-layer._ox, -layer._oy))
+
+    def _furn_update_all(self) -> None:
+        for layer in self.furniture_layers:
+            layer.update()
 
     # -- layer logic (P18) ------------------------------------------------------
 
@@ -286,7 +350,8 @@ class Overlay(QWidget):
 
     def _bowl_rect(self, x: float, name: str) -> QRect:
         pm = self._props[name]
-        return QRect(int(x) - pm.width() // 2, int(self.desktop.floor_y) - pm.height(),
+        return QRect(int(x) - pm.width() // 2,
+                     int(self.desktop.floor_y_at(x)) - pm.height(),
                      pm.width(), pm.height())
 
     def _floor_props(self) -> list[tuple[float, str]]:
@@ -309,9 +374,9 @@ class Overlay(QWidget):
         if brain.grass_x is not None:
             out.append((brain.grass_x, "cat_grass"))
         if brain.litter_x is not None:
-            variant = ("litter_0" if brain.litter_fill < 2
-                       else "litter_1" if brain.litter_fill < 4 else "litter_2")
-            out.append((brain.litter_x, variant))
+            # always the clean base tray: every deposit is drawn on top as
+            # its own visible pile (P40), not via coarse fill-level variants
+            out.append((brain.litter_x, "litter_0"))
         if brain.tree_x is not None:
             out.append((brain.tree_x, "cat_tree"))
         if brain.box_x is not None:
@@ -321,12 +386,14 @@ class Overlay(QWidget):
     def _wheel_rect(self) -> QRect:
         pm = self._props["wheel_stand"]
         return QRect(int(self.cat.brain.wheel_x) - pm.width() // 2,
-                     int(self.desktop.floor_y) - pm.height(), pm.width(), pm.height())
+                     int(self.desktop.floor_y_at(self.cat.brain.wheel_x)) - pm.height(),
+                     pm.width(), pm.height())
 
     def _box_rect(self) -> QRect:
         pm = self._props["box"]
         return QRect(int(self.cat.brain.box_x) - pm.width() // 2,
-                     int(self.desktop.floor_y) - pm.height(), pm.width(), pm.height())
+                     int(self.desktop.floor_y_at(self.cat.brain.box_x)) - pm.height(),
+                     pm.width(), pm.height())
 
     def _shelf_rects(self) -> list[QRect]:
         """Screen rects of the floating wall shelves (P25)."""
@@ -338,6 +405,23 @@ class Overlay(QWidget):
         if self.cat.brain.water_x is None:
             return QRect()
         return self._bowl_rect(self.cat.brain.water_x, "fountain_0")
+
+    def _litter_deposit_rects(self) -> list[tuple[QRect, str]]:
+        """Each poop/pee as a visible pile in the tray (P40), deterministically
+        scattered so existing piles never jump around between events."""
+        brain = self.cat.brain
+        if brain.litter_x is None:
+            return []
+        br = self._bowl_rect(brain.litter_x, "litter_0")
+        out: list[tuple[QRect, str]] = []
+        for i, kind in enumerate(brain.litter_deposits):
+            pm = self._props["litter_poop" if kind == "poop" else "litter_pee"]
+            ox = ((i * 23) % 57) - 28          # -28..+28 across the tray
+            oy = 10 + ((i * 7) % 8)            # slight depth variation
+            out.append((QRect(br.center().x() + ox - pm.width() // 2,
+                              br.bottom() - oy - pm.height(),
+                              pm.width(), pm.height()), kind))
+        return out
 
     def _door_rect(self) -> QRect:
         if self._door is None:
@@ -372,6 +456,78 @@ class Overlay(QWidget):
                 rects.append(QRect(int(min(ax, toy.x)) - 4, int(min(ay, toy.y)) - 4,
                                    int(abs(ax - toy.x)) + 8, int(abs(ay - toy.y)) + 8))
         return rects
+
+    # -- small window geometry (P37) ----------------------------------------
+
+    def _origin(self) -> tuple[int, int]:
+        """World coords of the window's top-left corner. (0,0) while
+        fullscreen (placement mode): the buffer then maps 1:1 to the world."""
+        if self.isFullScreen():
+            return (0, 0)
+        return (self._win_x, self._win_y)
+
+    def _front_bounds(self) -> QRect:
+        """World-coords bounding rect of everything the front layer draws:
+        cat, bubble, cat door and ALL front toys (a resting ball far from
+        the cat must stay visible), plus margin and a minimum size."""
+        r = QRect(self._cat_rect())
+        r = r.united(self._bubble_rect()).united(self._door_rect())
+        for tr in self._toy_rects():
+            r = r.united(tr)
+        r = r.adjusted(-WIN_MARGIN, -WIN_MARGIN, WIN_MARGIN, WIN_MARGIN)
+        if r.width() < WIN_MIN_W:
+            r.moveLeft(r.center().x() - WIN_MIN_W // 2)
+            r.setWidth(WIN_MIN_W)
+        if r.height() < WIN_MIN_H:
+            r.moveTop(r.center().y() - WIN_MIN_H // 2)
+            r.setHeight(WIN_MIN_H)
+        return r
+
+    def _sync_window_geometry(self, force: bool = False) -> None:
+        """Keep the small front window covering all front-layer content.
+        Wayland clients cannot self-position: the desired rect goes into the
+        window title and the KWin script applies it (frameGeometry)."""
+        if self._placing or self.isFullScreen():
+            return
+        need = self._front_bounds()
+        cur = QRect(self._win_x, self._win_y, self.width(), self.height())
+        new = QRect(cur)
+        if force:
+            new = need
+        elif not cur.contains(need):
+            # content escaped: recenter on it (moves are cheap, sizes stay)
+            new = QRect(0, 0, max(cur.width(), need.width()),
+                        max(cur.height(), need.height()))
+            new.moveCenter(need.center())
+        else:
+            small = (need.width() < cur.width() * WIN_SHRINK_FRAC
+                     and need.height() < cur.height() * WIN_SHRINK_FRAC)
+            if small:
+                if self._shrink_since is None:
+                    self._shrink_since = self._time
+                elif self._time - self._shrink_since >= WIN_SHRINK_DELAY:
+                    new = need
+            else:
+                self._shrink_since = None
+        vg = QRect()
+        for s in QGuiApplication.screens():
+            vg = vg.united(s.geometry())
+        if new.width() >= vg.width() or new.height() >= vg.height():
+            new = QRect(vg)
+        else:
+            new.moveLeft(min(max(new.x(), vg.x()),
+                             vg.x() + vg.width() - new.width()))
+            new.moveTop(min(max(new.y(), vg.y()),
+                            vg.y() + vg.height() - new.height()))
+        if new == cur:
+            return
+        self._shrink_since = None
+        self._win_x, self._win_y = new.x(), new.y()
+        if new.size() != self.size():
+            self.resize(new.size())
+        self.setWindowTitle(
+            f"plasmacat@{new.x()},{new.y()},{new.width()},{new.height()}")
+        self.update()  # content moved relative to the window
 
     # -- simulation ---------------------------------------------------------
 
@@ -457,6 +613,7 @@ class Overlay(QWidget):
         sig = self._signature()
         furn_sig = (self.cat.brain.food_fill > 25,
                     round(self.cat.brain.litter_fill),
+                    len(self.cat.brain.litter_deposits),
                     len(self.cat.brain.puke_spots),
                     self.cat.brain.food_x, self.cat.brain.water_x,
                     self.cat.brain.scratch_x, self.cat.brain.bed_x,
@@ -465,14 +622,14 @@ class Overlay(QWidget):
                     self.cat.brain.box_x, tuple(self.cat.brain.shelves))
         if furn_sig != self._last_furn_sig:
             self._last_furn_sig = furn_sig
-            self.furniture_layer.refresh()
+            self._furn_update_all()
         # the fountain ripples on its own cheap repaint schedule (P25):
         # only its small region, not the whole back layer
         if self.cat.brain.water_x is not None:
             fframe = int(self._time * 2.5) % 3
             if fframe != self._last_fountain_frame:
                 self._last_fountain_frame = fframe
-                self.furniture_layer.update(self._fountain_rect())
+                self._furn_update(self._fountain_rect())
         # user notifications (P25): full litter box / vomit on the floor
         if self.notify is not None:
             st = self.cat.brain.state
@@ -502,7 +659,9 @@ class Overlay(QWidget):
                     or (not moving and self._prev_moving):
                 self.update()
             else:
-                self.update(old.united(new).adjusted(6, 6, 6, 6))
+                ox, oy = self._origin()
+                self.update(old.united(new).adjusted(6, 6, 6, 6)
+                            .translated(-ox, -oy))
             self._prev_moving = moving
         # the cat moves between layers: keep the back layer in sync, and let
         # her pass through the cat door (P27) whenever the level flips
@@ -514,10 +673,11 @@ class Overlay(QWidget):
             self._door = None
         if back or back != self._prev_back or self._door is not None:
             if moving and self._move_ticks % 3 == 0:
-                self.furniture_layer.update()  # P32 full flush on the back layer
+                self._furn_update_all()  # P32 full flush on the back layer
             else:
-                self.furniture_layer.update(old.united(new).adjusted(6, 6, 6, 6))
+                self._furn_update(old.united(new).adjusted(6, 6, 6, 6))
         self._prev_back = back
+        self._sync_window_geometry()
         if self.debug:
             self.update()  # platform lines may change anytime
 
@@ -529,6 +689,9 @@ class Overlay(QWidget):
         cursor; left-click drops it, right-click cancels."""
         self._placing = kind
         self._place_since = self._time
+        # plain title: no '@geometry' — the KWin script leaves a fullscreen
+        # window alone while placement mode needs the whole screen (P37)
+        self.setWindowTitle("plasmacat")
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, False)
         self.showFullScreen()
         self.activateWindow()
@@ -537,7 +700,8 @@ class Overlay(QWidget):
     def _end_placement(self) -> None:
         self._placing = None
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
-        self.showFullScreen()
+        self.showNormal()
+        self._sync_window_geometry(force=True)  # back to the small window
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         if not self._placing:
@@ -561,7 +725,7 @@ class Overlay(QWidget):
                 self.cat.brain.water_x = x
             elif kind == "wall_shelf":
                 # fixed to the 'wall' at the dropped height — never falls
-                y = min(max(pos.y(), 140.0), self.desktop.floor_y - 80)
+                y = min(max(pos.y(), 140.0), self.desktop.floor_y_at(pos.x()) - 80)
                 self.cat.brain.shelves.append((x, y))
                 del self.cat.brain.shelves[:-4]  # keep at most 4 shelves
                 self._sync_furniture_platforms()
@@ -594,28 +758,28 @@ class Overlay(QWidget):
         plats = []
         if self.cat.brain.tree_x is not None:
             x = self.cat.brain.tree_x
-            fy = self.desktop.floor_y
+            fy = self.desktop.floor_y_at(x)
             plats += [
                 Platform(x - 54, x + 42, fy - 108, "Katzenbaum"),
                 Platform(x - 24, x + 66, fy - 192, "Katzenbaum"),
             ]
         if self.cat.brain.scratch_x is not None:
             x = self.cat.brain.scratch_x
-            fy = self.desktop.floor_y
+            fy = self.desktop.floor_y_at(x)
             # wide top platform of the scratching post (canvas cols 2-21)
             plats.append(Platform(x - 30, x + 27, fy - 192, "Kratzbaum"))
         if self.cat.brain.bed_x is not None:
             x = self.cat.brain.bed_x
-            fy = self.desktop.floor_y
+            fy = self.desktop.floor_y_at(x)
             # the cushion IS a surface: the cat lies IN the bed, not next to it
             plats.append(Platform(x - 55, x + 55, fy - 27, "Katzennest"))
         if self.cat.brain.wheel_x is not None:
             x = self.cat.brain.wheel_x
-            fy = self.desktop.floor_y
+            fy = self.desktop.floor_y_at(x)
             plats.append(Platform(x - 60, x + 60, fy - 42, "Laufrad"))
         if self.cat.brain.box_x is not None:
             x = self.cat.brain.box_x
-            fy = self.desktop.floor_y
+            fy = self.desktop.floor_y_at(x)
             # the box's inner floor: the cat sits IN the cardboard box
             plats.append(Platform(x - 55, x + 55, fy - 30, "Karton"))
         for sx, sy in self.cat.brain.shelves:
@@ -633,6 +797,18 @@ class Overlay(QWidget):
                      pm.width(), pm.height())
 
     # -- toys (called from the tray menu) --------------------------------------
+
+    def set_status_window(self, on: bool) -> None:
+        """Tray toggle (P39): the small always-on-top status panel."""
+        if on and self._status_win is None:
+            from plasmacat.ui.statuswin import StatusWindow
+            self._status_win = StatusWindow(self)
+        if self._status_win is not None:
+            self._status_win.setVisible(on)
+        self.cust.status_window = on
+        act = getattr(self, "_status_action", None)
+        if act is not None and act.isChecked() != on:
+            act.setChecked(on)  # user closed the window via its X button
 
     def toggle_string(self, on: bool) -> None:
         if on:
@@ -705,6 +881,11 @@ class Overlay(QWidget):
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
             p.fillRect(region, QColor(0, 0, 0, 0))
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            # P37: the window shows only a slice of the world — everything
+            # below is drawn in world coordinates, translated by the window's
+            # world position ((0,0) while fullscreen in placement mode)
+            ox, oy = self._origin()
+            p.translate(-ox, -oy)
             if self.debug:
                 p.setPen(QPen(QColor(0, 255, 0, 160), 2))
                 for plat in self.desktop.platforms:

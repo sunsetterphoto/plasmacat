@@ -17,6 +17,7 @@ EDGE_MARGIN = 10.0        # how close to a platform edge the cat dares go
 ACCEL = 800.0             # px/s^2 — she speeds up visibly, not instantly (P26)
 DECEL = 1000.0            # px/s^2 — and brakes before the target, no overshoot
 MIN_SPEED = 25.0          # crawl while braking
+STEP_UP_MAX = 60.0        # max floor step between screens she walks over (P38)
 
 
 class CatBody:
@@ -123,6 +124,17 @@ class CatBody:
                         self.airborne = False
                         self.platform = p
                         break
+            if self.airborne and self.y > desktop.floor_y_at(self.x):
+                # safety net (P38): never fall through the world — gaps
+                # between screens have no floor platform to land on, so
+                # snap to the nearest floor (x clamped onto its span)
+                p = desktop.nearest_floor(self.x, self.y)
+                self.x = min(max(self.x, p.x0), p.x1)
+                self.y = p.y
+                self.vy = 0.0
+                self.vx = 0.0
+                self.airborne = False
+                self.platform = p
             return
 
         # grounded
@@ -177,8 +189,32 @@ class CatBody:
                     self.facing = -self.facing  # wall: turn around (P16)
                 else:
                     self.x = next_x
-                    # walking off the edge?
-                    if not self.platform.contains_x(self.x, -EDGE_MARGIN):
+                    if self.platform.floor:
+                        # floor edges are solid ground up to the exact seam
+                        # (P38): the -EDGE_MARGIN lip-drop is for window tops
+                        if not self.platform.contains_x(self.x):
+                            nxt = desktop.floor_platform_at(self.x, self.y)
+                            if nxt is not None and nxt.y - self.y > 0.0:
+                                # lower screen floor: step off and drop onto it
+                                self.airborne = True
+                                self.vy = 0.0
+                                self.vx = step / dt
+                                self.platform = None
+                            elif nxt is not None and nxt.y - self.y >= -STEP_UP_MAX:
+                                # same level or small step up: cross on foot
+                                self.platform = nxt
+                                self.y = nxt.y
+                            else:
+                                # gap between screens or a too-tall step:
+                                # a wall — stay on OUR side and turn around
+                                self.x = (min(self.x, self.platform.x1)
+                                          if self.facing > 0
+                                          else max(self.x, self.platform.x0))
+                                self.stop()
+                                self.blocked = True
+                                self.facing = -self.facing
+                    elif not self.platform.contains_x(self.x, -EDGE_MARGIN):
+                        # walking off a window top (unchanged)
                         self.airborne = True
                         self.vy = 0.0
                         self.vx = step / dt

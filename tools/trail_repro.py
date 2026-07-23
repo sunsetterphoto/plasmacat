@@ -16,6 +16,7 @@ class FakeBridge(QObject):
     cursorChanged = Signal(int, int)
     windowsChanged = Signal(list)
     workAreaChanged = Signal(dict)
+    workAreasChanged = Signal(list)
 
 
 def main() -> None:

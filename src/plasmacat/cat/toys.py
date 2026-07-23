@@ -76,9 +76,10 @@ class Toy:
                 self.on_ground = False  # free fall past every edge (P24)
         # the floor is the unconditional catch: a toy can end up BELOW it
         # when the work area moves (panel grows). Without this snap it falls
-        # into the void until the float overflows (observed live, P25)
-        if self.y > desktop.floor_y:
-            self.y = desktop.floor_y
+        # into the void until the float overflows (observed live, P25).
+        # Per-screen floor since P38 (floor_y_at resolves the toy's screen).
+        if self.y > desktop.floor_y_at(self.x):
+            self.y = desktop.floor_y_at(self.x)
             if abs(self.vy) > 60:
                 self.vy = -self.vy * BOUNCE_DAMP
                 bounced = True

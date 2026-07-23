@@ -140,6 +140,7 @@ class Brain:
         # P10: litter box + big cat tree
         self.litter_x: float | None = None
         self.litter_fill = 0.0              # poop units; user cleans at 5
+        self.litter_deposits: list[str] = []  # P40: "poop"/"pee" per event
         self.tree_x: float | None = None
         # P11: exercise wheel
         self.wheel_x: float | None = None
@@ -637,6 +638,7 @@ class Brain:
 
     def clean_litter(self) -> None:
         self.litter_fill = 0.0
+        self.litter_deposits.clear()
         self.sounds.append("scratch")
         self.log.append("litter box cleaned")
 
@@ -1091,9 +1093,12 @@ class Brain:
                 self._fx_t = 0.7
             if self.state_left <= 0:
                 self.needs["bladder"] = 100.0
-                self.litter_fill += 1.0 if self.rng.random() < 0.4 else 0.5
+                poop = self.rng.random() < 0.4  # ~2 poop / 3 pee per full box
+                self.litter_fill += 1.0 if poop else 0.5
+                self.litter_deposits.append("poop" if poop else "pee")
                 self.add_xp(0.5, "litter box")
-                self.log.append(f"litter used (fill {self.litter_fill:.1f})")
+                self.log.append(f"litter used ({self.litter_deposits[-1]}, "
+                                f"fill {self.litter_fill:.1f})")
                 self.state = "idle"
         elif self.state == "litter_beg":
             self._fx_t -= dt

@@ -91,6 +91,22 @@ returning after a weekend isn't instant death. Autosave every 30 s + on quit.
 Reset deletes the save and re-execs (`os.execvpe`) so the next run hits the first-run wizard
 cleanly. The leftover KWin script is handled by the new instance's idempotent load (D9).
 
+## D20 — Multi-monitor world model (P38)
+The world is the virtual desktop; the KWin script sends one work area per
+output (`SetWorkAreas`, active screen first) via `clientArea(WorkArea, output,
+desktop)`. DesktopState holds `work_areas` (one floor platform each);
+`floor_y_at(x)` resolves any x to its screen's floor, `floor_x0/x1` are the
+union. Floor seams are walkable: same level crosses on foot, steps up to 60 px
+(STEP_UP_MAX) are snapped, taller steps and gaps between screens are walls
+(turn around); jumping across stays legal. Falling into a gap snaps to the
+nearest floor (`nearest_floor`, x clamped onto its span) — the cat's version
+of the P25 toy safety net. Floor edges have no -EDGE_MARGIN lip-drop (that is
+a window-top behavior); single-screen behavior is unchanged. Rendering: one
+fullscreen FurnitureLayer per screen (`QWindow.setScreen` + `showFullScreen`,
+each translating world→screen), the small front window (D19) roams all
+screens in virtual coords via KWin. Sim-covered (P38 block); live dual-screen
+test pending (single-screen machine at implementation time).
+
 ## D18 — Occlusion model for windows (P16)
 - Platforms = window top edges CLIPPED by foreground windows (KWin stacking
   order, later covers earlier): a background window is jumpable only along
@@ -100,7 +116,7 @@ cleanly. The leftover KWin script is handled by the new instance's idempotent lo
   around. Jumping onto/over a window stays legal (only horizontal ground
   movement is blocked; full arc-through-window collision is out of scope).
 
-## D17 — Rendering/performance contract (measured, P12c)
+## D17 — Rendering/performance contract (measured, P12c; SOLVED by P37/D19)
 The fullscreen translucent surface costs a native buffer copy per repaint
 (~7 MB at 1707x1067 logical). Measured on the live machine: ~13-24% of one
 core while the cat is active (varies with user mouse activity), py-spy shows
@@ -108,7 +124,23 @@ only ~15% of that in Python paintEvent — the rest is native Qt/Wayland buffer
 handling. Mitigations in place: adaptive frame rate (33 ms active / 66 ms
 idle), repaint gating by a change signature (no repaint unless something
 visible changed), 30 Hz bridge cursor throttle. Estimated idle: ~2-3%.
-If active-mode CPU ever becomes unacceptable, the proper fix is a small
-cat-following overlay window positioned via the KWin script (frameGeometry is
-read-write, kdotool proves it) instead of a fullscreen surface — kept as
-optional P13; placement mode would still need a temporary fullscreen window.
+**P37 replaced the fullscreen front overlay with a small cat-following window
+(D19): measured ~0.0%/core while walking — the buffer-copy cost is gone.**
+The furniture layer stays fullscreen (keepBelow) but repaints only on content
+changes (signature-gated), so its cost stays negligible.
+
+## D19 — Small front window, geometry via window title (P37)
+Wayland clients cannot position themselves; KWin scripts can (`frameGeometry`
+is read-write, kdotool proves it). Channel: the app encodes the desired rect
+in the overlay's window title (`plasmacat@x,y,w,h`); the bridge script
+connects `captionChanged` and applies it (plain `plasmacat` title = leave
+alone, used while placement mode goes fullscreen temporarily). No polling, no
+extra DBus surface. Window policy: cover the world bounding box of all
+front-layer content (cat, bubble, cat door, ALL toys — a resting ball far
+from the cat must stay visible) + 24 px margin, min 240x180, clamped to the
+virtual screen geometry; recenter when content escapes (moves are cheap),
+shrink only after 5 s below 60% fill (resizes reallocate the buffer).
+Rendering translates world→window by the requested origin (KWin applies the
+position, so we trust our own request). Verified: window follows a walking
+cat across the whole screen, no trails, ~0.0%/core.
+

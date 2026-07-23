@@ -31,14 +31,18 @@ attached to you over time.
 - **Stuff to play with**: ball (bouncy physics), plush mouse, string — and a
   **laser pointer**: a red dot follows your cursor; she chases, wiggles and
   pounces but never truly catches it (great for luring her to a spot). Plus
-  furniture: scratching post, cat bed, cat grass, litter box (you empty it),
-  big cat tree, exercise wheel, floating wall shelves, and a cardboard box
-  she hides in to ambush you.
+  furniture: scratching post, cat bed, cat grass, litter box (every poop and
+  pee shows as its own little pile — you empty it), big cat tree, exercise
+  wheel, floating wall shelves, and a cardboard box she hides in to ambush you.
 - **Food & water**: food bowl with a little shop (Kibble/Tuna/Milk/Catnip —
   she likes them differently), and a perpetual water fountain that never
   runs dry.
-- **Sound**: retro synth pack and a natural pack with real cat recordings
-  (see `assets/sounds/natural/ATTRIBUTION.md`), mute + volume in the tray.
+- **Sound**: retro synth pack and a natural pack with real cat recordings —
+  meows, purring, eating and drinking (see
+  `assets/sounds/natural/ATTRIBUTION.md`), mute + volume in the tray.
+- **Status window**: an optional always-on-top panel with all need bars and
+  care buttons (treat, refill food, clean litter) — toggle it from the tray,
+  it remembers its state.
 
 ## Requirements
 
@@ -59,7 +63,8 @@ The first run opens the customization wizard. State is saved every 30 s to
 `~/.local/share/catgame/save.json` (needs decay while you're away).
 
 Everything is driven from the **system tray icon**: needs status, give treat,
-toys, bowls, food shop, furniture, sound, customize, reset, quit.
+toys, bowls, food shop, furniture, sound, status window, start at login,
+customize, reset, quit.
 
 Optional app launcher for your menu (edit the `Exec=` path first):
 ```bash
@@ -74,10 +79,12 @@ If the app crashed and left the KWin helper script behind:
 
 ## How it works
 
-- Two fullscreen transparent, click-through Qt overlays: the cat layer above
-  all windows, the furniture layer behind them. A tiny persistent KWin helper
-  script (`kwin/plasmacat-bridge.js`) streams the cursor position, window
-  geometries and the work area to the app over DBus.
+- A small transparent, click-through window follows the cat above all windows
+  (Wayland apps can't self-position, so the KWin script places it via a rect
+  encoded in the window title); one fullscreen layer per screen behind all
+  windows holds the furniture. Multi-monitor aware. A tiny persistent KWin
+  helper script (`kwin/plasmacat-bridge.js`) streams the cursor position,
+  window geometries and the per-screen work areas to the app over DBus.
 - The game logic (brain, physics, sprites, sounds) is pure Python and covered
   by a headless simulation test:
   ```bash

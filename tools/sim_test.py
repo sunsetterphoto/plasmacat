@@ -967,6 +967,161 @@ def main() -> None:
     assert catL6.brain.level == "back", catL6.brain.level
     print("P28: level dwell OK")
 
+    # -- P34: laser pointer ------------------------------------------------------
+    from plasmacat.cat.toys import Laser, ToyManager as _TM3
+
+    # the dot follows the cursor with lag, blinks out on escape
+    dZ = DesktopState(1920, 1080)
+    dZ.set_cursor(1000, 800)
+    lz = Laser(100.0, 100.0)
+    for _ in range(int(2 / DT)):
+        lz.tick_physics(DT, dZ)
+    assert abs(lz.x - 1000) < 50 and abs(lz.y - 800) < 50, (lz.x, lz.y)
+    lz.escape()
+    assert not lz.visible
+    for _ in range(int(1.0 / DT)):
+        lz.tick_physics(DT, dZ)
+    assert lz.visible
+    # she chases the dot across the floor and pounces it
+    catZ = Cat(400, 1080, rng=random.Random(501))
+    tmZ = _TM3(rng=random.Random(501))
+    catZ.brain.toys = tmZ
+    catZ.brain.needs["play"] = 50.0
+    tmZ.spawn("laser", 900.0, 900.0)
+    dZ.set_cursor(900, 800)
+    dZ.cursor_active = True
+    catZ.tick(DT, dZ)
+    assert catZ.brain._score("laser_chase", dZ) > 0.0
+    catZ.brain._start("laser_chase", catZ.body, dZ)
+    seenZ: set[str] = set()
+    for _ in range(int(25 / DT)):
+        catZ.tick(DT, dZ)
+        tmZ.tick(DT, dZ, catZ, catZ.brain.sounds)
+        seenZ.add(catZ.brain.state)
+        catZ.brain.sounds.clear()
+    assert "laser_pounce" in seenZ or "wiggle" in seenZ, seenZ
+    assert catZ.brain.attachment_xp > 0, "never caught the dot (no XP)"
+    # tired cats give up and take a break
+    catZ3 = Cat(400, 1080, rng=random.Random(503))
+    tmZ3 = _TM3(rng=random.Random(503))
+    catZ3.brain.toys = tmZ3
+    tmZ3.spawn("laser", 900.0, 900.0)
+    catZ3.brain.needs["energy"] = 26.0
+    catZ3.tick(DT, dZ)
+    catZ3.brain.state = "laser_chase"
+    catZ3.brain.state_left = 30.0
+    for _ in range(int(2 / DT)):
+        catZ3.tick(DT, dZ)
+        catZ3.brain.sounds.clear()
+    assert catZ3.brain.state != "laser_chase", catZ3.brain.state
+    assert catZ3.brain._laser_cd > 0, "no laser cooldown after giving up"
+    # and a tired cat won't even start
+    assert catZ3.brain._score("laser_chase", dZ) == 0.0
+    print("P34: laser pointer OK")
+
+    # -- P38: multi-monitor (multiple work areas) -------------------------------
+    from plasmacat.cat.physics import CatBody, WALK_SPEED
+    from plasmacat.cat.toys import Ball
+
+    # two side-by-side screens, aligned bottoms: seamless crossing
+    dM = DesktopState(1920, 1080)
+    dM.set_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1080},
+                       {"x": 1920, "y": 0, "w": 1920, "h": 1080}])
+    floors = [p for p in dM.platforms if p.floor]
+    assert len(floors) == 2, floors
+    assert dM.floor_y == 1080.0 and dM.floor_y_at(2500) == 1080.0
+    assert dM.floor_x1 == 3840.0
+    body = CatBody(1800.0, 1080.0)
+    body.walk_to(2200.0, WALK_SPEED)
+    for _ in range(int(30 / DT)):
+        body.tick(DT, dM)
+        assert not body.airborne, "same-height crossing must not fall"
+    assert abs(body.x - 2200.0) < 1.0 and body.y == 1080.0, (body.x, body.y)
+    assert body.platform is not None and body.platform.floor
+
+    # a small height step (<= STEP_UP_MAX): she steps up, keeps walking
+    dM2 = DesktopState(1920, 1080)
+    dM2.set_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1080},
+                        {"x": 1920, "y": -30, "w": 1920, "h": 1080}])  # floor 1050
+    assert dM2.floor_y_at(2500) == 1050.0
+    body2 = CatBody(1800.0, 1080.0)
+    body2.walk_to(2200.0, WALK_SPEED)
+    for _ in range(int(30 / DT)):
+        body2.tick(DT, dM2)
+    assert abs(body2.x - 2200.0) < 1.0 and body2.y == 1050.0, (body2.x, body2.y)
+
+    # a tall step (> STEP_UP_MAX): a wall — she stops and turns around
+    dM3 = DesktopState(1920, 1080)
+    dM3.set_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1080},
+                        {"x": 1920, "y": -100, "w": 1920, "h": 1080}])  # floor 980
+    body3 = CatBody(1800.0, 1080.0)
+    body3.walk_to(2200.0, WALK_SPEED)
+    for _ in range(int(10 / DT)):
+        body3.tick(DT, dM3)
+    assert body3.x <= 1920.0 and body3.blocked and body3.facing == -1, \
+        (body3.x, body3.blocked, body3.facing)
+
+    # a gap between screens: a wall too, and a fall into it is caught
+    dM4 = DesktopState(1920, 1080)
+    dM4.set_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1080},
+                        {"x": 2100, "y": 0, "w": 1920, "h": 1080}])
+    assert dM4.floor_platform_at(2000.0) is None
+    body4 = CatBody(1800.0, 1080.0)
+    body4.walk_to(2500.0, WALK_SPEED)
+    for _ in range(int(10 / DT)):
+        body4.tick(DT, dM4)
+    assert body4.x <= 1920.0 and body4.blocked, (body4.x, body4.blocked)
+    body4.airborne = True
+    body4.vy = 500.0
+    body4.platform = None
+    body4.x = 2000.0  # falling in the gap: the safety net lands her on A's seam
+    for _ in range(int(3 / DT)):
+        body4.tick(DT, dM4)
+    assert not body4.airborne and body4.y == 1080.0 and body4.x == 1920.0, \
+        (body4.x, body4.y, body4.airborne)
+
+    # a toy rests on the second screen's own floor height
+    ball = Ball(2500.0, 300.0)
+    for _ in range(int(6 / DT)):
+        ball.tick_physics(DT, dM2)
+    assert ball.on_ground and abs(ball.y - 1050.0) < 1.0, ball.y
+
+    # single-area regression: floor_y unchanged, one floor platform
+    dM5 = DesktopState(1920, 1080)
+    assert dM5.floor_y == 1080.0
+    assert len([p for p in dM5.platforms if p.floor]) == 1
+    print("P38: multi-monitor OK")
+
+    # -- P40: litter deposits (visible poop/pee per event) ---------------------
+    dP = DesktopState(1920, 1080)
+    catP = Cat(400, 1080, rng=random.Random(701))
+    catP.brain.litter_x = 600.0
+    for _ in range(5):
+        catP.brain.state = "litter_cover"
+        catP.brain.state_left = 0.0
+        catP.tick(DT, dP)
+    assert len(catP.brain.litter_deposits) >= 2, catP.brain.litter_deposits
+    assert all(d in ("poop", "pee") for d in catP.brain.litter_deposits)
+    expected = sum(1.0 if d == "poop" else 0.5
+                   for d in catP.brain.litter_deposits)
+    assert abs(catP.brain.litter_fill - expected) < 1e-9, \
+        (catP.brain.litter_fill, expected)
+    catP.brain.clean_litter()
+    assert catP.brain.litter_fill == 0.0 and not catP.brain.litter_deposits
+
+    # persistence round-trip (P39 status flag + P40 deposits)
+    from pathlib import Path
+    import tempfile
+    from plasmacat.persist import Customization, GameState, load, save
+    st = GameState(customization=Customization(status_window=True),
+                   litter_fill=1.5, litter_deposits=["poop", "pee"])
+    with tempfile.TemporaryDirectory() as td:
+        save(Path(td) / "save.json", st)
+        back = load(Path(td) / "save.json")
+    assert back is not None and back.litter_deposits == ["poop", "pee"]
+    assert back.customization.status_window is True
+    print("P39/P40: litter deposits + persistence OK")
+
     print("SIM_TEST_OK")
 
 

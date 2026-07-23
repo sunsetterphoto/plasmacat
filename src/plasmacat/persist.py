@@ -27,6 +27,7 @@ class Customization:
     sound_on: bool = True
     volume: float = 0.7
     sound_pack: str = "retro"                       # retro|natural
+    status_window: bool = False                     # P39: small status panel
 
     def derive_shade(self) -> tuple[int, int, int]:
         if self.fur_shade is not None:
@@ -65,6 +66,7 @@ class Customization:
             sound_on=d.get("sound_on", True),
             volume=d.get("volume", 0.7),
             sound_pack=d.get("sound_pack", "retro"),
+            status_window=d.get("status_window", False),
         )
 
 
@@ -86,6 +88,7 @@ class GameState:
     grass_charges: float = 3.0
     litter_x: float | None = None
     litter_fill: float = 0.0
+    litter_deposits: list[str] = field(default_factory=list)  # P40: poop/pee
     tree_x: float | None = None
     wheel_x: float | None = None
     box_x: float | None = None            # P25: cardboard box
@@ -116,6 +119,7 @@ def save(path: Path, state: GameState) -> None:
         "grass_charges": state.grass_charges,
         "litter_x": state.litter_x,
         "litter_fill": state.litter_fill,
+        "litter_deposits": state.litter_deposits,
         "tree_x": state.tree_x,
         "wheel_x": state.wheel_x,
         "box_x": state.box_x,
@@ -151,6 +155,8 @@ def load(path: Path) -> GameState | None:
         grass_charges=float(d.get("grass_charges", 3.0)),
         litter_x=d.get("litter_x"),
         litter_fill=float(d.get("litter_fill", 0.0)),
+        litter_deposits=[x for x in d.get("litter_deposits", [])
+                         if x in ("poop", "pee")],
         tree_x=d.get("tree_x"),
         wheel_x=d.get("wheel_x"),
         box_x=d.get("box_x"),

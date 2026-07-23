@@ -4,4 +4,4 @@
 #   ./run.sh --unload-bridge     remove a leftover KWin helper script (after a crash)
 set -euo pipefail
 cd "$(dirname "$0")"
-exec env PYTHONPATH=src .venv/bin/python -m plasmacat.main "$@"
+exec env PYTHONPATH=src PYTHONUNBUFFERED=1 .venv/bin/python -m plasmacat.main "$@"

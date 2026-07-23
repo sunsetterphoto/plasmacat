@@ -333,6 +333,22 @@ def _litter_box(fill: int) -> list[str]:
     return c.rows()
 
 
+def _litter_poop() -> list[str]:
+    """One visible poop pile in the tray (P40): ~12x9 px at scale 3."""
+    c = _C(4, 3)
+    c.set(1, 0, "k")
+    c.set(2, 0, "k")
+    c.rect(0, 1, 3, 2, "k")
+    return c.rows()
+
+
+def _litter_pee() -> list[str]:
+    """One visible dark wet pee spot in the tray (P40): ~15x6 px at scale 3."""
+    c = _C(5, 2)
+    c.rect(0, 0, 4, 1, "F")
+    return c.rows()
+
+
 def _wheel_stand() -> list[str]:
     """Exercise wheel STAND only (static): base rail + strut + axle. The rim
     (_wheel_rim) rotates around the same center; the stand must NOT rotate."""
@@ -410,6 +426,8 @@ PROPS: dict[str, list[str]] = {
     "litter_0": _litter_box(0),
     "litter_1": _litter_box(1),
     "litter_2": _litter_box(2),
+    "litter_poop": _litter_poop(),   # P40: one visible deposit per event
+    "litter_pee": _litter_pee(),
     "cat_tree": _cat_tree(),
     "wheel_stand": _wheel_stand(),
     "wheel_rim": _wheel_rim(),
