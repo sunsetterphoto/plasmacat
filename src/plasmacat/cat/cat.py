@@ -87,6 +87,8 @@ class Cat:
                 "prep_jump": "crouch",
                 "land": "crouch",
                 "paw_bat": "paw_bat",
+                "cuddle": "loaf",        # P48: snuggled up next to the other cat
+                "fight": "tail_lash",    # P48: the spat
                 "ritual_sit": "sit",
                 "ritual_scratch": "scratch_self",
                 "ritual_groom": "groom",

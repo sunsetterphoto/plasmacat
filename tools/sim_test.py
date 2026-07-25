@@ -1433,6 +1433,163 @@ def main() -> None:
     assert legacy.food_fill == 55.0
     print("P47: lifecycle stages + aging + household + persistence OK")
 
+    # -- P48: cat-cat social life (cuddle, chase, fight, co-sleeping) ----------
+    dS = DesktopState(1920, 1080)
+    catS1 = Cat(400, 1080, rng=random.Random(960))
+    catS2 = Cat(700, 1080, rng=random.Random(961))
+    catS1.tick(DT, dS)
+    catS2.tick(DT, dS)  # resolve floor platforms
+    for c in (catS1, catS2):
+        c.brain.peers = [(o.body, o.brain) for o in (catS1, catS2) if o is not c]
+    # social scoring needs a free peer + cooldown
+    catS1.brain._social_cd = 0.0
+    assert catS1.brain._score("social", dS, catS1.body) > 0.0
+    catS1.brain._social_cd = 100.0
+    assert catS1.brain._score("social", dS, catS1.body) == 0.0
+    catS1.brain._social_cd = 0.0
+    # a busy peer (eating) is not approachable
+    catS2.brain.state = "eating"
+    assert catS1.brain._social_peer(catS1.body) is None
+    catS2.brain.state = "sit"
+
+    class _Rig(random.Random):
+        """Deterministic rolls for the intent pick; midpoint for the rest."""
+        def __init__(self, seq) -> None:
+            super().__init__(0)
+            self._seq = list(seq)
+        def random(self) -> float:
+            return self._seq.pop(0) if self._seq else 0.5
+        def uniform(self, a, b) -> float:
+            return (a + b) / 2
+        def choice(self, xs):
+            return xs[0]
+
+    def social_run(intent_roll, until, max_s=25.0):
+        catS1.brain.rng = _Rig([intent_roll])
+        catS1.brain.state = "idle"
+        catS1.brain.state_left = 0.0
+        # pin the peer: she sits still and doesn't start her own social move
+        catS2.brain.state = "sit"
+        catS2.brain.state_left = max_s + 30.0
+        catS2.brain._social_cd = 999.0
+        catS2.body.target_x = None
+        catS1.brain._start("social", catS1.body, dS)
+        for _ in range(int(max_s / DT)):
+            catS1.tick(DT, dS)
+            catS2.tick(DT, dS)
+            catS1.brain.sounds.clear()
+            catS2.brain.sounds.clear()
+            if until():
+                return True
+        return False
+
+    # cuddle: roll past fight+chase -> cuddle, both loaf facing each other
+    catS1.body.x, catS2.body.x = 400.0, 700.0
+    ok = social_run(0.9, lambda: catS1.brain.state == "cuddle"
+                    and catS2.brain.state == "cuddle")
+    assert ok, (catS1.brain.state, catS2.brain.state)
+    assert catS1.body.facing == -catS2.body.facing
+    assert abs(catS1.body.x - catS2.body.x) < 200, "cuddle needs closeness"
+    aff0 = catS2.brain.needs["affection"]
+    for _ in range(int(8 / DT)):
+        catS1.tick(DT, dS)
+        catS2.tick(DT, dS)
+        catS1.brain.sounds.clear()
+        catS2.brain.sounds.clear()
+    assert catS2.brain.needs["affection"] > aff0, "cuddle gave no affection"
+    assert catS1.brain._social_cd > 0, "no social cooldown after cuddling"
+
+    # chase: roll below fight+chase band -> paired chase states, then resolves
+    catS1.body.x, catS2.body.x = 400.0, 700.0
+    ok = social_run(0.2, lambda: catS1.brain.state == "chase_peer"
+                    and catS2.brain.state == "flee_peer")
+    assert ok, (catS1.brain.state, catS2.brain.state)
+    play1, play2 = catS1.brain.needs["play"], catS2.brain.needs["play"]
+    for _ in range(int(20 / DT)):
+        catS1.tick(DT, dS)
+        catS2.tick(DT, dS)
+        catS1.brain.sounds.clear()
+        catS2.brain.sounds.clear()
+        if catS1.brain.state not in ("to_peer", "chase_peer", "flee_peer") \
+                and catS2.brain.state not in ("flee_peer",):
+            break
+    assert catS1.brain.state not in ("chase_peer", "flee_peer"), catS1.brain.state
+    assert catS2.brain.state != "flee_peer", catS2.brain.state
+    assert catS1.brain.needs["play"] > play1 or catS2.brain.needs["play"] > play2
+
+    # fight: rare roll -> both fight, angry sounds, then someone stalks off
+    catS1.body.x, catS2.body.x = 400.0, 700.0
+    catS1.brain.state = "idle"
+    catS1.brain.rng = _Rig([0.01])
+    catS1.brain._start("social", catS1.body, dS)
+    assert catS1.brain._peer_intent == "fight"
+    spat_sounds: set[str] = set()
+    for _ in range(int(20 / DT)):
+        catS1.tick(DT, dS)
+        catS2.tick(DT, dS)
+        spat_sounds.update(catS1.brain.sounds)
+        spat_sounds.update(catS2.brain.sounds)
+        catS1.brain.sounds.clear()
+        catS2.brain.sounds.clear()
+        if catS1.brain.state == "fight" and catS2.brain.state == "fight":
+            break
+    assert catS1.brain.state == "fight" and catS2.brain.state == "fight"
+    for _ in range(int(12 / DT)):
+        catS1.tick(DT, dS)
+        catS2.tick(DT, dS)
+        spat_sounds.update(catS1.brain.sounds)
+        catS1.brain.sounds.clear()
+        spat_sounds.update(catS2.brain.sounds)
+        catS2.brain.sounds.clear()
+    assert catS1.brain.state != "fight" and catS2.brain.state != "fight"
+    assert "meow2" in spat_sounds or "mew" in spat_sounds
+
+    # co-sleeping: a snoozing peer attracts the nap
+    catS1.body.x, catS2.body.x = 400.0, 900.0
+    catS2.brain.state = "sleep"
+    catS2.brain.state_left = 300.0
+    catS2.body.target_x = None
+    catS1.brain.state = "idle"
+    catS1.brain.rng = _Rig([0.1])  # < 0.5: the co-sleep branch
+    catS1.brain._start("sleep", catS1.body, dS)
+    assert catS1.brain.state == "to_sleep_peer", catS1.brain.state
+    for _ in range(int(20 / DT)):
+        catS1.tick(DT, dS)
+        catS1.brain.sounds.clear()
+        if catS1.brain.state == "sleep":
+            break
+    assert catS1.brain.state == "sleep", catS1.brain.state
+    assert abs(catS1.body.x - catS2.body.x) < 250, catS1.body.x
+
+    # social states are level-neutral and not hunt-interruptible
+    catS1.brain._level = "front"
+    catS1.brain.state = "cuddle"
+    assert catS1.brain._committed_level(catS1.body) is None
+    catS1.brain.on_hunt_trigger(catS1.body, (600.0, 900.0), dS)
+    assert catS1.brain.state == "cuddle", "hunt interrupted a cuddle"
+
+    # free-run regression (the cooldown once never decremented -> 0 events):
+    # two free cats on one floor must actually find each other socially
+    dF = DesktopState(1920, 1080)
+    catsF = [Cat(400, 1080, rng=random.Random(970)),
+             Cat(900, 1080, rng=random.Random(971))]
+    for c in catsF:
+        c.tick(DT, dF)
+        c.brain.peers = [(o.body, o.brain) for o in catsF if o is not c]
+        c.brain.food_x = 110.0
+        c.brain.water_x = 200.0
+    seen_social: set[str] = set()
+    for _ in range(int(600 / DT)):
+        for c in catsF:
+            c.tick(DT, dF)
+            c.brain.sounds.clear()
+            if c.brain.state in ("to_peer", "cuddle", "fight", "chase_peer",
+                                 "flee_peer", "to_sleep_peer"):
+                seen_social.add(c.brain.state)
+    assert "to_peer" in seen_social, f"no social approach in 10 min: {seen_social}"
+    assert seen_social & {"cuddle", "chase_peer"}, seen_social
+    print("P48: cat-cat social life OK")
+
     print("SIM_TEST_OK")
 
 

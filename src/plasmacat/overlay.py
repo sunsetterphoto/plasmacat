@@ -291,6 +291,9 @@ class Overlay(QWidget):
         cat.brain.age = age
         cat.brain.toys = self.toys
         self.cats.append(cat)
+        # P48: the cats know each other (cuddle, chase, spats, co-sleeping)
+        for c in self.cats:
+            c.brain.peers = [(o.body, o.brain) for o in self.cats if o is not c]
         br, bl = self._make_banks(cust, self.scale, cat.brain.stage)
         self._banks[cat] = (br, bl, cat.brain.stage)
         return cat

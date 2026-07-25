@@ -32,7 +32,10 @@ attached to you over time.
   and petting keep her young longer, and a neglected cat ages faster.
 - **Multi-cat household**: tray "Add kitten…" brings home up to 4 cats —
   each with her own look, needs and personality, all sharing the same bowls,
-  furniture and litter box. The status board, treats and control mode follow
+  furniture and litter box. And they have a social life: they cuddle up
+  loaf-to-loaf (hearts included), chase each other across the desktop
+  (roles flip on a catch), have the occasional spat, and prefer napping
+  next to each other. The status board, treats and control mode follow
   the cat nearest your cursor.
 - **Customizable**: first-run wizard for name, fur color, pattern (solid,
   tabby, tuxedo, spots, tortie), eyes and collar — recolorable anytime.
