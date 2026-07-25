@@ -5,6 +5,8 @@ top of your real application windows, treats them as walls, chases and hunts
 your cursor, snuggles with it, sleeps, eats, uses the litter box — and grows
 attached to you over time.
 
+![PlasmaCat on a real desktop — two cats on a wall shelf and cat tree, with food bowl, water fountain and scratching post on the desktop layer behind the windows](docs/screenshot.png)
+
 ![PlasmaCat sprite sheet](docs/sprite_sheet_64.png)
 
 ## What she does
