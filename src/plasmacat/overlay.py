@@ -553,10 +553,24 @@ class Overlay(QWidget):
         if force:
             new = need
         elif not cur.contains(need):
-            # content escaped: recenter on it (moves are cheap, sizes stay)
-            new = QRect(0, 0, max(cur.width(), need.width()),
-                        max(cur.height(), need.height()))
-            new.moveCenter(need.center())
+            if need.width() > cur.width() or need.height() > cur.height():
+                # content bigger than the window (rare): grow + recenter
+                new = QRect(0, 0, max(cur.width(), need.width()),
+                            max(cur.height(), need.height()))
+                new.moveCenter(need.center())
+            else:
+                # follow with the SMALLEST move that keeps the content inside
+                # (P44): recentering used to snap the window by hundreds of
+                # px, and since KWin applies the new position a frame later,
+                # the cat visibly jumped while walking
+                if need.left() < cur.left():
+                    new.moveLeft(need.left())
+                if need.right() > cur.right():
+                    new.moveRight(need.right())
+                if need.top() < cur.top():
+                    new.moveTop(need.top())
+                if need.bottom() > cur.bottom():
+                    new.moveBottom(need.bottom())
         else:
             small = (need.width() < cur.width() * WIN_SHRINK_FRAC
                      and need.height() < cur.height() * WIN_SHRINK_FRAC)
