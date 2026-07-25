@@ -1,5 +1,12 @@
-# PlasmaCat public repo ignores
+# PlasmaCat repo ignores
 .venv/
 __pycache__/
 *.pyc
 kwin/*.runtime.js
+
+# Private working files — never push these (sanitized repo)
+PROGRESS.md
+AGENTS.md
+dev-backup-*.tar.gz
+/Bildschirmfoto*.png
+/Screenshot*.png

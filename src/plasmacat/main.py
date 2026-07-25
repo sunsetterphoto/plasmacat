@@ -39,19 +39,29 @@ def autostart_enabled() -> bool:
 
 def set_autostart(enabled: bool) -> None:
     """Tray 'Start at login': install/remove the XDG autostart entry.
-    Enabling also installs the app launcher (fixes the portal warning)."""
+    Enabling also installs the app launcher (fixes the portal warning).
+    The Exec line is rewritten to this checkout's run.sh, so the entries
+    keep working after the project folder is moved."""
     from PySide6.QtCore import QStandardPaths
     if enabled:
         target = _autostart_path()
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(DESKTOP_FILE, target)
+        _install_desktop_file(target)
         apps = _xdg_dir(QStandardPaths.StandardLocation.ApplicationsLocation) / \
             "plasmacat.desktop"
         if not apps.exists():
             apps.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(DESKTOP_FILE, apps)
+            _install_desktop_file(apps)
     else:
         _autostart_path().unlink(missing_ok=True)
+
+
+def _install_desktop_file(target: Path) -> None:
+    """Install our desktop file with Exec pointing at this checkout."""
+    lines = DESKTOP_FILE.read_text(encoding="utf-8").splitlines()
+    lines = [f"Exec={ROOT / 'run.sh'}" if line.startswith("Exec=") else line
+             for line in lines]
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _bar(value: float) -> str:
