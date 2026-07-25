@@ -75,6 +75,11 @@ Optional app launcher for your menu (edit the `Exec=` path first):
 ```bash
 sed -i "s|^Exec=.*|Exec=$PWD/run.sh|" plasmacat.desktop
 cp plasmacat.desktop ~/.local/share/applications/
+# and the icon (regenerable via tools/make_icon.py):
+for s in 256 128 64 48 32 22 16; do
+  mkdir -p ~/.local/share/icons/hicolor/${s}x${s}/apps
+  cp assets/icons/plasmacat-${s}.png ~/.local/share/icons/hicolor/${s}x${s}/apps/plasmacat.png
+done
 ```
 
 If the app crashed and left the KWin helper script behind:

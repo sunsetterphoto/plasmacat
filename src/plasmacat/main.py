@@ -76,6 +76,9 @@ def main() -> int:
     # saves survive the PlasmaCat rename (P33)
     QCoreApplication.setApplicationName("catgame")
     QGuiApplication.setDesktopFileName("plasmacat")  # app_id -> KWin resourceClass
+    _icon_png = ROOT / "assets" / "icons" / "plasmacat-256.png"
+    if _icon_png.exists():  # repo checkout (pip installs fall back to theme)
+        app.setWindowIcon(QIcon(str(_icon_png)))
 
     from plasmacat.bridge.kwin import KWinBridge
     from plasmacat.cat.brain import NEED_DECAY
