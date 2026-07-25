@@ -429,15 +429,23 @@ class Overlay(QWidget):
         return ph if ph < 1.0 else -1.0
 
     def _desktop_covered(self, cat: Cat) -> bool:
-        """P50: is the cat's sprite occluded by a window right now? Only then
-        does the level flip visibly vanish/emerge — and only then does the
-        cat door play. On uncovered desktop the flip is seamless."""
+        """P50/P51: the cat door plays only when the crossing is hidden by a
+        (near-)MAXIMIZED window — that's when stepping forward/back is a
+        real vanishing/emerging act. Floating windows don't count: she can
+        hop onto those, but the level flip stays seamless, no door wanted.
+        The bridge reports no maximized flag, so 'maximized' is inferred
+        from the geometry: the window must span its work area (±8 px)."""
         cr = self._cat_rect(cat)
         cx, cy = cr.center().x(), cr.center().y()
         for w in self.desktop._windows:
-            if w["x"] <= cx <= w["x"] + w["w"] \
-                    and w["y"] <= cy <= w["y"] + w["h"]:
-                return True
+            if not (w["x"] <= cx <= w["x"] + w["w"]
+                    and w["y"] <= cy <= w["y"] + w["h"]):
+                continue
+            for ax, ay, aw, ah in self.desktop.work_areas:
+                if w["x"] <= ax + 8 and w["y"] <= ay + 8 \
+                        and w["x"] + w["w"] >= ax + aw - 8 \
+                        and w["y"] + w["h"] >= ay + ah - 8:
+                    return True  # a (near-)maximized window hides her here
         return False
 
     def cat_layer(self, cat: Cat) -> str | None:
