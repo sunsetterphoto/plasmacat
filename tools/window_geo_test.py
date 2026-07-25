@@ -151,6 +151,20 @@ def main() -> None:
     o._tick()
     assert calls, "moving back cat must repaint"
 
+    # 10. P50: the cat door only plays where a window covers the crossing
+    #     point; on visible desktop the level flip is seamless (no door)
+    o.cat.body.x = 400.0
+    o.desktop.set_windows([])
+    o.cat.brain._level = "front"   # she steps forward, desktop uncovered
+    o._tick()
+    assert o.cat not in o._doors, "door must not play on visible desktop"
+    o.desktop.set_windows([{"x": 300, "y": 850, "w": 400, "h": 200,
+                            "caption": "Covering"}])
+    o.cat.brain._level = "back"    # vanish behind the window: door plays
+    o._tick()
+    assert o.cat in o._doors, "covered crossing must play the door"
+    o._doors.clear()
+
     print("WINDOW_GEO_OK")
 
 

@@ -428,6 +428,18 @@ class Overlay(QWidget):
         ph = (self._time - d[2]) / DOOR_DUR
         return ph if ph < 1.0 else -1.0
 
+    def _desktop_covered(self, cat: Cat) -> bool:
+        """P50: is the cat's sprite occluded by a window right now? Only then
+        does the level flip visibly vanish/emerge — and only then does the
+        cat door play. On uncovered desktop the flip is seamless."""
+        cr = self._cat_rect(cat)
+        cx, cy = cr.center().x(), cr.center().y()
+        for w in self.desktop._windows:
+            if w["x"] <= cx <= w["x"] + w["w"] \
+                    and w["y"] <= cy <= w["y"] + w["h"]:
+                return True
+        return False
+
     def cat_layer(self, cat: Cat) -> str | None:
         """Which layer draws the cat this frame — or None while she passes
         through the door. The logical layer flips instantly (on_back_layer);
@@ -892,12 +904,15 @@ class Overlay(QWidget):
                             .translated(-ox, -oy))
             self._prev_moving = moving
         # the cats move between layers: keep the back layer in sync, and let
-        # them pass through the cat door (P27) whenever the level flips
+        # them pass through the cat door (P27) whenever the level flips —
+        # but only where a window actually covers the crossing point (P50):
+        # on visible desktop the flip is seamless, so the door is pointless
         for cat in self.cats:
             back = self.on_back_layer(cat)
             if back != self._prev_back.get(cat, False):
-                self._doors[cat] = (cat.body.x, cat.body.y, self._time,
-                                    "in" if back else "out")
+                if self._desktop_covered(cat):
+                    self._doors[cat] = (cat.body.x, cat.body.y, self._time,
+                                        "in" if back else "out")
             self._prev_back[cat] = back
         for cat in list(self._doors):
             if self._time - self._doors[cat][2] >= DOOR_DUR:
