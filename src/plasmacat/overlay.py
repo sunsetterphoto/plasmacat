@@ -1,7 +1,8 @@
 """Small, transparent, click-through overlay window: the game canvas (P37).
 
 The window covers just the bounding box of the front-layer content (cat,
-bubble, cat door, toys) instead of the whole screen — the fullscreen
+bubble, cat door, the front toys — resting floor toys live on the
+FurnitureLayer since P42) instead of the whole screen — the fullscreen
 translucent surface cost a native buffer copy per repaint (DECISIONS.md D17).
 Wayland clients cannot position themselves, so the desired rect is encoded in
 the window title ('plasmacat@x,y,w,h') and the KWin helper script applies it
@@ -284,10 +285,11 @@ class Overlay(QWidget):
         self._sync_furniture_platforms()
         # a placed status board must not end up under a grown panel (P42)
         if self.cust.status_pos is not None:
-            sx = min(max(self.cust.status_pos[0], self.desktop.floor_x0),
+            px, py = self.cust.status_pos
+            sx = min(max(px, self.desktop.floor_x0),
                      self.desktop.floor_x1 - STATUS_W)
-            sy = min(max(self.cust.status_pos[1], 0.0),
-                     self.desktop.floor_y - STATUS_H)
+            sy = min(max(py, 0.0),
+                     self.desktop.floor_y_at(px + STATUS_W / 2) - STATUS_H)
             if [sx, sy] != self.cust.status_pos:
                 self.cust.status_pos = [sx, sy]
                 self._furn_update(self._status_rect())

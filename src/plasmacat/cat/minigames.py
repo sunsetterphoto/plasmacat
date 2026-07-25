@@ -38,8 +38,9 @@ class MouseHunt:
         if self._spawn_t <= 0.0 and len(mice) < MAX_ALIVE \
                 and self.time_left > 5.0:
             self._spawn_t = self.rng.uniform(6.0, 9.0)
-            x = self.rng.uniform(desktop.floor_x0 + 100,
-                                 desktop.floor_x1 - 100)
+            # spawn inside a real work area, never in a gap between screens
+            ax, _ay, aw, _ah = self.rng.choice(desktop.work_areas)
+            x = self.rng.uniform(ax + 100, ax + aw - 100)
             toys.spawn("mouse", x, desktop.floor_y_at(x))
         for m in mice:
             if abs(m.x - cat.body.x) < CATCH_DIST \
