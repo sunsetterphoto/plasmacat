@@ -33,6 +33,7 @@ class CatBody:
         self.target_x: float | None = None  # walk destination
         self.speed = WALK_SPEED
         self.cur_speed = 0.0               # current ground speed (accel/brake)
+        self.speed_mult = 1.0              # P47: life-stage pace (set by Cat)
 
     # -- intents -----------------------------------------------------------
 
@@ -42,7 +43,7 @@ class CatBody:
             self.stop()
             return
         self.target_x = x
-        self.speed = speed
+        self.speed = speed * self.speed_mult
 
     def stop(self) -> None:
         self.target_x = None

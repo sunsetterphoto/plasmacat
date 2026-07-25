@@ -11,7 +11,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SAVE_VERSION = 1
+SAVE_VERSION = 2  # v2: cats[] list (P47 multi-cat); v1 single-cat keys migrate
 MAX_OFFLINE_SECONDS = 4 * 3600  # decay while away is capped at 4 h worth
 
 
@@ -76,11 +76,21 @@ class Customization:
 
 
 @dataclass
-class GameState:
+class CatState:
+    """One cat's personal state (P47): look, needs, progress, lifecycle."""
     customization: Customization = field(default_factory=Customization)
     needs: dict[str, float] = field(default_factory=dict)
     attachment_xp: float = 0.0
     petted_strokes: int = 0
+    age: float = 0.0                    # growth stage (float, 0..15)
+    care: float = 0.5                   # attention reservoir 0..1
+    fav_toy: str = ""                   # personality ('ball' | 'plush')
+
+
+@dataclass
+class GameState:
+    cats: list[CatState] = field(default_factory=lambda: [CatState()])
+    # the shared household (P47): one set of bowls/furniture for all cats
     toys: list[dict] = field(default_factory=list)  # [{kind, x, y}]
     food_type: str = "kibble"
     food_fill: float = 100.0
@@ -99,8 +109,12 @@ class GameState:
     box_x: float | None = None            # P25: cardboard box
     shelves: list[dict] = field(default_factory=list)  # P25: [{x, y}] wall shelves
     puke_spots: list[float] = field(default_factory=list)  # P25: messes to clean
-    fav_toy: str = ""                     # P26: personality ('ball' | 'plush')
     saved_at: float = 0.0
+
+    @property
+    def customization(self) -> Customization:
+        """Compat: the primary cat's look (global settings live there too)."""
+        return self.cats[0].customization
 
 
 def save(path: Path, state: GameState) -> None:
@@ -108,10 +122,15 @@ def save(path: Path, state: GameState) -> None:
     state.saved_at = time.time()
     payload = {
         "version": SAVE_VERSION,
-        "customization": state.customization.to_json(),
-        "needs": state.needs,
-        "attachment_xp": state.attachment_xp,
-        "petted_strokes": state.petted_strokes,
+        "cats": [{
+            "customization": c.customization.to_json(),
+            "needs": c.needs,
+            "attachment_xp": c.attachment_xp,
+            "petted_strokes": c.petted_strokes,
+            "age": c.age,
+            "care": c.care,
+            "fav_toy": c.fav_toy,
+        } for c in state.cats],
         "toys": state.toys,
         "food_type": state.food_type,
         "food_fill": state.food_fill,
@@ -130,10 +149,21 @@ def save(path: Path, state: GameState) -> None:
         "box_x": state.box_x,
         "shelves": state.shelves,
         "puke_spots": state.puke_spots,
-        "fav_toy": state.fav_toy,
         "saved_at": state.saved_at,
     }
     path.write_text(json.dumps(payload, indent=2))
+
+
+def _cat_from_json(c: dict) -> CatState:
+    return CatState(
+        customization=Customization.from_json(c.get("customization", {})),
+        needs={k: float(v) for k, v in c.get("needs", {}).items()},
+        attachment_xp=float(c.get("attachment_xp", 0.0)),
+        petted_strokes=int(c.get("petted_strokes", 0)),
+        age=float(c.get("age", 6.0)),
+        care=float(c.get("care", 0.5)),
+        fav_toy=c.get("fav_toy", ""),
+    )
 
 
 def load(path: Path) -> GameState | None:
@@ -143,11 +173,24 @@ def load(path: Path) -> GameState | None:
         d = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+    cats_raw = d.get("cats")
+    if isinstance(cats_raw, list) and cats_raw:
+        cats = [_cat_from_json(c) for c in cats_raw if isinstance(c, dict)] \
+            or [CatState()]
+    else:
+        # legacy v1 save (single cat at the top level, P47 migration):
+        # the veteran cat keeps her grown-up body (stage 6, not a kitten)
+        cats = [CatState(
+            customization=Customization.from_json(d.get("customization", {})),
+            needs={k: float(v) for k, v in d.get("needs", {}).items()},
+            attachment_xp=float(d.get("attachment_xp", 0.0)),
+            petted_strokes=int(d.get("petted_strokes", 0)),
+            age=6.0,
+            care=0.5,
+            fav_toy=d.get("fav_toy", ""),
+        )]
     state = GameState(
-        customization=Customization.from_json(d.get("customization", {})),
-        needs={k: float(v) for k, v in d.get("needs", {}).items()},
-        attachment_xp=float(d.get("attachment_xp", 0.0)),
-        petted_strokes=int(d.get("petted_strokes", 0)),
+        cats=cats,
         toys=[t for t in d.get("toys", []) if isinstance(t, dict)],
         food_type=d.get("food_type", "kibble"),
         food_fill=float(d.get("food_fill", 100.0)),
@@ -167,7 +210,6 @@ def load(path: Path) -> GameState | None:
         box_x=d.get("box_x"),
         shelves=[s for s in d.get("shelves", []) if isinstance(s, dict)],
         puke_spots=[float(x) for x in d.get("puke_spots", [])],
-        fav_toy=d.get("fav_toy", ""),
         saved_at=float(d.get("saved_at", 0.0)),
     )
     return state

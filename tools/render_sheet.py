@@ -20,9 +20,16 @@ def main() -> None:
     sprites.validate()
 
     entries = []
-    for name, frames in sprites.SPRITES.items():
-        for i, frame in enumerate(frames):
-            entries.append((f"{name}[{i}]", frame, sprites.DEFAULT_PALETTE))
+    if "--stages" in sys.argv:  # P47: one row of growth stages x key poses
+        for s in range(sprites.STAGES):
+            table = sprites.sprites_for(s)
+            pal = sprites.aged_palette(dict(sprites.DEFAULT_PALETTE), s)
+            for pose in ("sit", "stand", "walk", "sleep"):
+                entries.append((f"s{s}/{pose}", table[pose][0], pal))
+    else:
+        for name, frames in sprites.SPRITES.items():
+            for i, frame in enumerate(frames):
+                entries.append((f"{name}[{i}]", frame, sprites.DEFAULT_PALETTE))
 
     # Customization variants of the stand pose: fur palettes x patterns.
     variants = {
@@ -32,14 +39,15 @@ def main() -> None:
         "brown":   {"f": (140, 90, 55), "F": (95, 60, 35)},
         "siamese": {"f": (225, 210, 190), "F": (120, 90, 70), "e": (100, 160, 240)},
     }
-    for pname, overrides in variants.items():
-        pal = dict(sprites.DEFAULT_PALETTE)
-        pal.update(overrides)
-        for pattern in ("solid", "tabby", "tuxedo", "spots", "tortie"):
-            mat = sprites.apply_pattern(sprites.SPRITES["stand"][0], pattern)
-            entries.append((f"{pname}/{pattern}", mat, pal))
+    if "--stages" not in sys.argv:
+        for pname, overrides in variants.items():
+            pal = dict(sprites.DEFAULT_PALETTE)
+            pal.update(overrides)
+            for pattern in ("solid", "tabby", "tuxedo", "spots", "tortie"):
+                mat = sprites.apply_pattern(sprites.SPRITES["stand"][0], pattern)
+                entries.append((f"{pname}/{pattern}", mat, pal))
 
-    cols = 6
+    cols = 8 if "--stages" in sys.argv else 6
     rows = (len(entries) + cols - 1) // cols
     cell_w = (sprites.CANVAS_W + PAD * 2) * SCALE
     cell_h = (sprites.CANVAS_H + PAD * 2) * SCALE + LABEL_H

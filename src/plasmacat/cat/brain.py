@@ -40,6 +40,49 @@ LEVEL_DWELL_S = 30.0            # after a level change she STAYS (user P28)
 KEY_HOLD_S = 0.35               # P42: a direction key counts as 'held' this
                                 # long (auto-repeat refreshes; no key-up events)
 
+# -- aging / lifecycle (P47) ---------------------------------------------------
+AGE_MAX = 15.0                  # growth stages 0 (kitten) .. 15 (very old)
+AGE_STAGE_S = 8 * 3600.0        # base pace: one stage per 8 h of run time
+CARE_EMPTY_S = 7200.0           # attention reservoir 1 -> 0 in 2 h
+YOUNG_BAND = (3.0, 9.0)         # the 'young adult' band interaction stretches
+
+
+class Household:
+    """The shared home all cats live in (P47): bowl/furniture positions and
+    consumables (food fill, litter fill, grass charges, puke spots). Every
+    Brain forwards these attributes here, so all cats drink from the same
+    fountain and share one litter box."""
+
+    def __init__(self) -> None:
+        self.food_x: float | None = None
+        self.water_x: float | None = None
+        self.food_type = "kibble"
+        self.food_fill = 100.0              # 0..100, drains while eating
+        self.water_fill = 100.0
+        self.scratch_x: float | None = None
+        self.bed_x: float | None = None
+        self.grass_x: float | None = None
+        self.grass_charges = 3.0            # nibbles left; regrows over 10 min
+        self._grass_regrow = 0.0
+        self.litter_x: float | None = None
+        self.litter_fill = 0.0              # poop units; user cleans at 5
+        self.litter_deposits: list[str] = []  # P40: "poop"/"pee" per event
+        self.tree_x: float | None = None
+        self.wheel_x: float | None = None
+        self.shelves: list[tuple[float, float]] = []
+        self.box_x: float | None = None
+        self.puke_spots: list[float] = []   # x positions of messes to clean up
+
+
+def offline_aging(age: float, care: float, elapsed: float) -> tuple[float, float]:
+    """Aging while the game was closed: nobody pets or plays, so the care
+    reservoir drains and the clock runs at the uncared-for rate (the offline
+    gain is capped at one full stage)."""
+    elapsed = max(0.0, elapsed)
+    care = max(0.0, care - elapsed / CARE_EMPTY_S)
+    gained = min(elapsed / AGE_STAGE_S * 1.55, 1.0)
+    return min(AGE_MAX, age + gained), care
+
 # states that COMMIT her to a level (P28). Everything else (sit, groom,
 # loaf, watch, yawn, rituals, enjoy…) is level-neutral and never flips her:
 # the level only changes on deliberate cross-world actions.
@@ -97,8 +140,14 @@ def circadian(hour: int | None = None) -> tuple[float, float]:
 
 
 class Brain:
-    def __init__(self, rng: random.Random | None = None) -> None:
+    def __init__(self, rng: random.Random | None = None,
+                 household: Household | None = None) -> None:
         self.rng = rng or random.Random()
+        # the shared home (P47): bowls, furniture and consumables live on the
+        # Household; this brain's same-named attributes forward there (see the
+        # property wiring at the bottom of the class). A brain constructed
+        # without one gets a private household (tests, single-cat runs).
+        self.household = household or Household()
         self.needs: dict[str, float] = {
             "hunger": 80.0, "thirst": 80.0, "energy": 90.0,
             "play": 70.0, "affection": 50.0, "bladder": 85.0,
@@ -114,23 +163,16 @@ class Brain:
         self.petted_strokes = 0
         self.attachment_xp = 0.0
         self.log: list[str] = []
-        # P5: bowls, treat flag, sound intent queue, thought bubble
-        self.food_x: float | None = None
-        self.water_x: float | None = None
+        # P47 lifecycle: age in growth stages (float, 0..15) and the care
+        # reservoir (0..1) that interaction refills and time drains
+        self.age = 6.0                      # adult default; kittens start at 0
+        self.care = 0.5
+        # P5: treat flag, sound intent queue, thought bubble
         self.treat_pending = False
         self.toys = None                    # ToyManager, set by the overlay
         self._play_toy_target = None        # Toy being approached/pounced
-        # P8d: bowl contents + food shop + catnip
-        self.food_type = "kibble"
-        self.food_fill = 100.0              # 0..100, drains while eating
-        self.water_fill = 100.0
+        # P8d: catnip
         self.catnip_high = 0.0              # seconds of hyper mode remaining
-        # P9: placeable furniture
-        self.scratch_x: float | None = None
-        self.bed_x: float | None = None
-        self.grass_x: float | None = None
-        self.grass_charges = 3.0            # nibbles left; regrows over 10 min
-        self._grass_regrow = 0.0
         self._sleep_mult = 1.0              # 1.5 while sleeping in the cat bed
         # P15: rituals & chains
         self._ritual: list[str] | None = None   # pre-sleep ritual steps left
@@ -139,13 +181,7 @@ class Brain:
         self._post_sleep = 0.0              # seconds of extra attention-seeking
         self._was_sleeping = False
         self._lick_cycles = 0               # face-wash: paw licks remaining (P20)
-        # P10: litter box + big cat tree
-        self.litter_x: float | None = None
-        self.litter_fill = 0.0              # poop units; user cleans at 5
-        self.litter_deposits: list[str] = []  # P40: "poop"/"pee" per event
-        self.tree_x: float | None = None
         # P11: exercise wheel
-        self.wheel_x: float | None = None
         self.sounds: list[str] = []       # drained by the overlay each tick
         self.bubble: str | None = None    # thought-bubble icon name (props)
         self._purr_t = 0.0
@@ -161,10 +197,6 @@ class Brain:
         self._overate_s = 0.0            # time spent eating while full
         self._bored_eat = False          # this meal is boredom eating
         self._grass_recent = 0.0         # recently nibbled grass (stacking it)
-        self.puke_spots: list[float] = []  # x positions of messes to clean up
-        # P25 furniture: floating wall shelves + the cardboard box
-        self.shelves: list[tuple[float, float]] = []
-        self.box_x: float | None = None
         # P26: personality + movement polish
         self.fav_toy = "ball" if self.rng.random() < 0.5 else "plush"
         self._circ = (1.0, 1.0)          # circadian (sleep, activity) multipliers
@@ -220,6 +252,52 @@ class Brain:
     @property
     def attachment_name(self) -> str:
         return ATTACHMENT_LEVELS[self.attachment_level][1]
+
+    # -- lifecycle (P47) -------------------------------------------------------
+
+    @property
+    def stage(self) -> int:
+        """Growth stage 0..15: drives sprite proportions and behavior."""
+        return min(max(int(self.age), 0), int(AGE_MAX))
+
+    @property
+    def life_stage(self) -> str:
+        s = self.stage
+        if s <= 2:
+            return "kitten"
+        if s <= 5:
+            return "junior"
+        if s <= 10:
+            return "adult"
+        if s <= 13:
+            return "senior"
+        return "old"
+
+    @property
+    def speed_mult(self) -> float:
+        """Kittens toddle, seniors shuffle: walk/run speed by stage."""
+        s = self.stage
+        if s <= 5:
+            return 0.78 + 0.044 * s      # 0.78 -> 1.0
+        if s <= 10:
+            return 1.0
+        return 1.0 - 0.06 * (s - 10)     # 0.70 at 15
+
+    def _aging_rate(self) -> float:
+        """Growth stages per second. Food + sleep cycles set the base (a
+        well-fed, well-rested cat ages slowest); interaction stretches the
+        young-adult band; neglect speeds the whole clock up."""
+        health = (self.needs["hunger"] + self.needs["energy"]) / 200.0
+        rate = (1.55 - 0.85 * health) / AGE_STAGE_S
+        if self.care < 0.25:
+            rate *= 1.4                  # a neglected cat ages faster
+        if YOUNG_BAND[0] <= self.age <= YOUNG_BAND[1]:
+            rate *= 1.0 - 0.55 * self.care  # loved cats stay young longer
+        return rate
+
+    def _care(self, amount: float) -> None:
+        """Refill the attention reservoir (called by every interaction)."""
+        self.care = min(1.0, self.care + amount)
 
     # -- visibility level (P28) -------------------------------------------------
 
@@ -278,6 +356,7 @@ class Brain:
     def on_stroke(self, body: CatBody) -> None:
         """A petting stroke over the cat's body."""
         self._neglect_s = 0.0
+        self._care(0.10)
         if self.mood < 30 and self.rng.random() < 0.5:
             # grumpy cat has no patience: walks off (no affection gained)
             plat = body.platform
@@ -304,6 +383,7 @@ class Brain:
     def on_rub(self, body: CatBody) -> None:
         """Gentle cursor contact in the head zone."""
         self._neglect_s = 0.0
+        self._care(0.08)
         self.gain("affection", 1.0)
         self.add_xp(1.5, "head rub")
         if self.state in ("idle", "stand", "sit", "wander", "groom", "enjoy",
@@ -323,6 +403,7 @@ class Brain:
             self.state_left = 0.7
             body.stop()
             self.gain("play", 1.0)
+            self._care(0.03)
 
     def clear_toy_state(self) -> None:
         """'Clear toys' (tray): drop every behavior that targets a toy, so she
@@ -402,6 +483,7 @@ class Brain:
         if self.needs["play"] < 15:
             return
         self._force_level_ready()  # the human teases: she may come forward now
+        self._care(0.04)
         self.hunt_cooldown = HUNT_COOLDOWN_S
         self.hunt_target = cursor
         self.state = "hunt_stalk"
@@ -460,8 +542,13 @@ class Brain:
     def _score(self, name: str, desktop: DesktopState) -> float:
         n = self.needs
         _sleep_m, _act_m = self._circ
+        stage = self.stage
+        # P47 life-stage temperament: kittens are hyper and nap a lot,
+        # seniors slow down and lose interest in workouts
         if name == "sleep":
-            return 3.0 * (1 - n["energy"] / 100.0) ** 2 * _sleep_m
+            stage_m = 1.25 if stage <= 2 else \
+                (1.0 + 0.07 * (stage - 10) if stage > 10 else 1.0)
+            return 3.0 * (1 - n["energy"] / 100.0) ** 2 * _sleep_m * stage_m
         if name == "beg":
             lack = max(1 - n["hunger"] / 100.0, 1 - n["thirst"] / 100.0)
             return 2.5 * lack ** 2 if lack > 0.45 else 0.0
@@ -469,6 +556,8 @@ class Brain:
             has_windows = any(not p.floor for p in desktop.platforms)
             if not has_windows or self.hop_cooldown > 0:
                 return 0.0
+            if stage >= 12:
+                return 0.0  # too old for window acrobatics
             return (0.35 + 0.4 * (n["play"] / 100.0)) * _act_m
         if name == "eat":
             if self.food_x is None:
@@ -491,7 +580,8 @@ class Brain:
         if name == "play_toy":
             if not self.toys or not self.toys.toys:
                 return 0.0
-            return (0.45 + 0.45 * (1 - n["play"] / 100.0)) * _act_m
+            stage_m = 1.3 if stage <= 2 else (0.55 if stage >= 11 else 1.0)
+            return (0.45 + 0.45 * (1 - n["play"] / 100.0)) * _act_m * stage_m
         if name == "scratch":
             spots = [v for v in (self.scratch_x, self.tree_x) if v is not None]
             if not spots:
@@ -513,12 +603,15 @@ class Brain:
         if name == "exercise":
             if self.wheel_x is None or n["energy"] < 30:
                 return 0.0
+            if stage <= 2 or stage >= 11:
+                return 0.0  # too small / too old for the exercise wheel
             return (0.32 + 0.40 * (1 - n["play"] / 100.0)) * _act_m
         if name == "chase":
             if not desktop.cursor_active:
                 return 0.0
             s = 0.30 + 0.35 * (1 - n["play"] / 100.0)
-            return (s + (0.3 if self.catnip_high > 0 else 0.0)) * _act_m
+            stage_m = 1.2 if stage <= 2 else (0.5 if stage >= 11 else 1.0)
+            return (s + (0.3 if self.catnip_high > 0 else 0.0)) * _act_m * stage_m
         if name == "cuddle":
             if not desktop.cursor_active or self.attachment_level < 1:
                 return 0.0
@@ -547,11 +640,14 @@ class Brain:
                 return 0.0
             if self._laser_cd > 0 or n["energy"] < 25 or n["play"] < 10:
                 return 0.0
+            if stage >= 12:
+                return 0.0  # the old lady has seen enough dots
             return 0.85
         if name == "wander":
             if self.wander_cooldown > 0:
                 return 0.0
-            return 0.30 + 0.15 * (n["play"] / 100.0)
+            stage_m = 1.15 if stage <= 2 else (0.6 if stage >= 11 else 1.0)
+            return (0.30 + 0.15 * (n["play"] / 100.0)) * stage_m
         if name == "groom":
             return 0.22
         if name == "sit":
@@ -606,6 +702,10 @@ class Brain:
         self._grass_recent = max(0.0, self._grass_recent - dt)
         self._laser_cd = max(0.0, self._laser_cd - dt)
         self._neglect_s += dt  # reset by any user attention (stroke/rub/treat)
+        # P47 lifecycle: the care reservoir drains with time; the aging clock
+        # advances at the care/health-dependent rate
+        self.care = max(0.0, self.care - dt / CARE_EMPTY_S)
+        self.age = min(AGE_MAX, self.age + self._aging_rate() * dt)
         self.state_left -= dt
         # a window wall stopped the walk (set by physics): cool down instead
         # of instantly re-walking into the same wall (P19 fix, wired up in P24)
@@ -686,6 +786,7 @@ class Brain:
     def on_treat(self) -> None:
         """Tray 'Give treat': the cat will go eat soon and love you for it."""
         self._neglect_s = 0.0
+        self._care(0.20)
         self.treat_pending = True
         self.log.append("treat offered!")
 
@@ -697,11 +798,13 @@ class Brain:
             return
         self.food_type = food
         self.food_fill = 100.0
+        self._care(0.10)
         self.sounds.append("chime")
         self.log.append(f"bought {FOODS[food]['label']}")
 
     def refill_food(self) -> None:
         self.food_fill = 100.0
+        self._care(0.12)
         self.sounds.append("eat")
         self.log.append("food refilled")
 
@@ -713,6 +816,7 @@ class Brain:
     def clean_litter(self) -> None:
         self.litter_fill = 0.0
         self.litter_deposits.clear()
+        self._care(0.08)
         self.sounds.append("scratch")
         self.log.append("litter box cleaned")
 
@@ -720,6 +824,7 @@ class Brain:
         """Tray cleanup: removes all vomit puddles."""
         if self.puke_spots:
             self.puke_spots.clear()
+            self._care(0.06)
             self.sounds.append("scratch")
             self.log.append("vomit cleaned up")
 
@@ -774,8 +879,10 @@ class Brain:
             self.state = "to_grass"
             self.state_left = 20.0
         elif name == "litter":
-            if self.litter_fill < LITTER_CAPACITY and self.needs["bladder"] < 30:
+            if self.litter_fill < LITTER_CAPACITY and self.needs["bladder"] < 30 \
+                    and self.stage < 11:
                 # pre-poop zoomies: sprint across the desktop like crazy first
+                # (seniors skip the theatrics and just go)
                 self.state = "zoomies"
                 self.state_left = self.rng.uniform(6, 10)
                 self._fx_t = 0.0
@@ -1425,6 +1532,7 @@ class Brain:
                 if caught:
                     self.gain("play", 14)
                     self.add_xp(3.0, f"caught {toy.kind}")
+                    self._care(0.06)
                     self.sounds.append("boing")
                     self.log.append(f"caught the {toy.kind}!")
                     if toy.kind == "plush" and self.rng.random() < 0.4:
@@ -1516,6 +1624,7 @@ class Brain:
                     self.gain("play", 10)
                     self.gain("affection", 1)
                     self.add_xp(2.0, "caught the dot")
+                    self._care(0.04)
                     self.sounds.append("boing")
                     self.log.append("caught the laser dot!")
                 self.state = "laser_chase"
@@ -1556,6 +1665,7 @@ class Brain:
                     self.sounds.append(self._meow())
                     self.gain("affection", 6)
                     self.add_xp(6.0, "gift for you")
+                    self._care(0.08)
                     self.log.append("brought you a gift!")
                     self.state = "enjoy"
                     self.state_left = 2.5
@@ -1617,3 +1727,19 @@ class Brain:
 
     def _fmt_needs(self) -> str:
         return " ".join(f"{k}={v:.0f}" for k, v in self.needs.items())
+
+
+def _household_forward(name: str):
+    """Build a property that forwards a brain attribute to the Household
+    (P47): existing code keeps reading/writing brain.food_x & friends, but
+    every cat in the home shares the same underlying values."""
+    return property(lambda self: getattr(self.household, name),
+                    lambda self, value: setattr(self.household, name, value))
+
+
+for _forwarded in ("food_x", "water_x", "food_type", "food_fill", "water_fill",
+                   "scratch_x", "bed_x", "grass_x", "grass_charges",
+                   "_grass_regrow", "litter_x", "litter_fill", "litter_deposits",
+                   "tree_x", "wheel_x", "shelves", "box_x", "puke_spots"):
+    setattr(Brain, _forwarded, _household_forward(_forwarded))
+del _forwarded

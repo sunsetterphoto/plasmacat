@@ -24,6 +24,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from plasmacat.bridge.desktop import DesktopState
+from plasmacat.cat.brain import Household
 from plasmacat.cat.cat import Cat
 from plasmacat.cat.interactions import InteractionDetector
 from plasmacat.cat.minigames import MouseHunt
@@ -33,6 +34,7 @@ from plasmacat.persist import Customization
 
 SCALE_MIN = 2
 FPS_MS = 16
+MAX_CATS = 4  # P47: household size cap (each cat costs a brain + a sprite bank)
 
 # P37 small-window policy (see module docstring)
 WIN_MIN_W = 240
@@ -131,9 +133,11 @@ class FurnitureLayer(QWidget):
                     p.translate(-cxm, -cym)
                     p.drawPixmap(wr.x(), wr.y(), o._props["wheel_rim"])
                     p.restore()
-            # 3. the cat herself, when she has "stepped back" to this level
-            if o.cat_layer() == "back":
-                frame, acc, cr, br_b, bubble = o.current_cat()
+            # 3. the cats that have "stepped back" to this level (P47: loop)
+            for cat in o.cats:
+                if o.cat_layer(cat) != "back":
+                    continue
+                frame, acc, cr, br_b, bubble = o.current_cat(cat)
                 p.drawPixmap(cr.x(), cr.y(), frame)
                 if acc is not None:
                     p.drawPixmap(cr.x(), cr.y(), acc)
@@ -185,16 +189,23 @@ class Overlay(QWidget):
         # sprite canvas is 64x48, so scale 2 == 128x96 px cat
         self.scale = max(SCALE_MIN, min(3, screen.width() // 850))
         self.prop_scale = max(3, self.scale - 1)
-        self.cat = Cat(self.desktop.screen_w * 0.5, self.desktop.floor_y,
-                       rng=random.Random())
-        self.cat.brain.food_x = self.desktop.floor_x0 + 110.0
-        self.cat.brain.water_x = self.desktop.floor_x0 + 200.0
         self.cust = cust or Customization()
-        self.bank_right, self.bank_left = self._make_banks(self.cust)
         self.player = player
         self.debug = debug
         self.toys = ToyManager(rng=random.Random())
-        self.cat.brain.toys = self.toys
+        # P47 multi-cat: every cat shares one Household (bowls, furniture,
+        # litter — brains forward there), but has its own look, banks, brain
+        self.household = Household()
+        self.cats: list[Cat] = []
+        self._banks: dict[Cat, tuple[SpriteBank, SpriteBank, int]] = {}
+        self._doors: dict[Cat, tuple[float, float, float, str]] = {}
+        self._prev_back: dict[Cat, bool] = {}
+        self._prev_brain_state: dict[Cat, str] = {}
+        self._active: Cat | None = None  # the cat the cursor is 'with'
+        self._control_on = False         # P42 control-mode toggle state
+        primary = self.add_cat(self.cust, age=6.0)
+        primary.brain.food_x = self.desktop.floor_x0 + 110.0
+        primary.brain.water_x = self.desktop.floor_x0 + 200.0
 
         self._props = {
             name: prop_pixmap(name, self.prop_scale)
@@ -218,13 +229,10 @@ class Overlay(QWidget):
         self._last_sig: tuple = ()
         self._last_furn_sig: tuple = ()
         self._last_fountain_frame = -1
-        self._prev_back = False
-        self._prev_brain_state = ""
         self._prev_puke_count = 0
         self._last_back_toy_sig: tuple = ()  # P42: floor toys on the back layer
         self._furn_move_ticks = 0            # P32 flush cadence, back layer
         self._prev_furn_moving = False
-        self._door: tuple[float, float, float, str] | None = None  # P27
         self._move_ticks = 0               # P32 full-flush cadence
         self._prev_moving = False
         self._win_x = 0                    # P37: window's world position
@@ -258,19 +266,91 @@ class Overlay(QWidget):
         self.show()
         self._sync_window_geometry(force=True)
 
+    # -- cats (P47 multi-cat) --------------------------------------------------
+
+    @property
+    def cat(self) -> Cat:
+        """The primary cat (compat alias for cats[0]; the household state is
+        shared, so furniture access via her brain hits every cat's world)."""
+        return self.cats[0]
+
+    @property
+    def active(self) -> Cat:
+        """The cat the user is currently 'with' (nearest the cursor): target
+        of the status board, treats, customization and control mode."""
+        if self._active is None or self._active not in self.cats:
+            self._active = self.cats[0]
+        return self._active
+
+    def add_cat(self, cust: Customization, age: float = 0.0,
+                x: float | None = None) -> Cat:
+        if x is None:
+            x = self.desktop.screen_w * 0.5
+        cat = Cat(x, self.desktop.floor_y_at(x), rng=random.Random(),
+                  cust=cust, household=self.household)
+        cat.brain.age = age
+        cat.brain.toys = self.toys
+        self.cats.append(cat)
+        br, bl = self._make_banks(cust, self.scale, cat.brain.stage)
+        self._banks[cat] = (br, bl, cat.brain.stage)
+        return cat
+
+    def add_kitten(self, cust: Customization) -> Cat | None:
+        """Tray 'Add kitten': a new stage-0 cat near the cursor."""
+        if len(self.cats) >= MAX_CATS:
+            return None
+        cx, _cy = self.desktop.cursor
+        x = min(max(float(cx), self.desktop.floor_x0 + 120),
+                self.desktop.floor_x1 - 120)
+        kitten = self.add_cat(cust, age=0.0, x=x)
+        kitten.brain.sounds.append("mew")
+        return kitten
+
+    def _banks_for(self, cat: Cat) -> tuple[SpriteBank, SpriteBank]:
+        """The cat's sprite banks, rebuilt when she grows into a new stage
+        (the stage drives the sprite proportions, P47)."""
+        br, bl, st = self._banks[cat]
+        if st != cat.brain.stage:
+            br, bl = self._make_banks(cat.cust, self.scale, cat.brain.stage)
+            self._banks[cat] = (br, bl, cat.brain.stage)
+        return br, bl
+
+    def _update_active(self) -> None:
+        """Track which cat the cursor is with (80 px hysteresis against
+        flickering). Control mode follows: you steer the cat you point at."""
+        cx, cy = self.desktop.cursor
+
+        def dist(c: Cat) -> float:
+            return abs(c.body.x - cx) + 0.5 * abs(c.body.y - cy)
+
+        best = min(self.cats, key=dist)
+        if self._active is None:
+            self._active = best
+        elif best is not self._active and dist(self._active) - dist(best) > 80:
+            self._active = best
+        for c in self.cats:
+            want = self._control_on and c is self._active
+            if c.brain.user_control != want:
+                c.brain.set_user_control(want)
+
     # -- customization ---------------------------------------------------------
 
     @staticmethod
-    def _make_banks(cust: Customization, scale: int = SCALE_MIN) -> tuple[SpriteBank, SpriteBank]:
+    def _make_banks(cust: Customization, scale: int = SCALE_MIN,
+                    stage: int = 6) -> tuple[SpriteBank, SpriteBank]:
         kwargs = dict(palette=cust.to_palette(), pattern=cust.pattern, scale=scale,
-                      accessory=cust.collar is not None)
+                      accessory=cust.collar is not None, stage=stage)
         return (SpriteBank(facing="right", **kwargs),
                 SpriteBank(facing="left", **kwargs))
 
     def set_customization(self, cust: Customization) -> None:
-        """Re-skin the cat live (from the tray 'Customize...' action)."""
-        self.cust = cust
-        self.bank_right, self.bank_left = self._make_banks(cust, self.scale)
+        """Re-skin the ACTIVE cat live (from the tray 'Customize...' action)."""
+        cat = self.active
+        cat.cust = cust
+        if cat is self.cats[0]:
+            self.cust = cust
+        br, bl = self._make_banks(cust, self.scale, cat.brain.stage)
+        self._banks[cat] = (br, bl, cat.brain.stage)
         self.update()
 
     def _on_work_area(self, d: dict) -> None:
@@ -328,72 +408,76 @@ class Overlay(QWidget):
 
     # -- layer logic (P18) ------------------------------------------------------
 
-    def on_back_layer(self) -> bool:
+    def on_back_layer(self, cat: Cat) -> bool:
         """The visibility level is a deliberate brain decision with a 30 s
         dwell (P28): calm states are level-neutral, only committed
         cross-world actions flip it. The overlay just follows brain.level."""
-        return self.cat.brain.level == "back"
+        return cat.brain.level == "back"
 
     # -- cat door between the levels (P27) -------------------------------------
 
-    def _door_phase(self) -> float:
+    def _door_phase(self, cat: Cat) -> float:
         """0..1 while the cat-door animation runs, else -1."""
-        if self._door is None:
+        d = self._doors.get(cat)
+        if d is None:
             return -1.0
-        ph = (self._time - self._door[2]) / DOOR_DUR
+        ph = (self._time - d[2]) / DOOR_DUR
         return ph if ph < 1.0 else -1.0
 
-    def cat_layer(self) -> str | None:
+    def cat_layer(self, cat: Cat) -> str | None:
         """Which layer draws the cat this frame — or None while she passes
         through the door. The logical layer flips instantly (on_back_layer);
         the door makes the crossing visible: old side -> inside -> new side."""
-        back = self.on_back_layer()
-        ph = self._door_phase()
+        back = self.on_back_layer(cat)
+        ph = self._door_phase(cat)
         if ph < 0:
             return "back" if back else "front"
         if 0.25 <= ph < 0.65:
             return None  # inside the door
+        d = self._doors[cat]
         if ph < 0.25:
-            return "front" if self._door[3] == "in" else "back"  # old side
+            return "front" if d[3] == "in" else "back"  # old side
         return "back" if back else "front"                       # new side
 
-    def current_cat(self):
+    def current_cat(self, cat: Cat):
         """The cat's current frame + accessory + rects, for the layer that
         draws her this tick."""
-        bank = self.bank_right if self.cat.body.facing >= 0 else self.bank_left
-        key = self._anim_key()
-        idx = self.cat.frame % bank.frame_count(key)
+        bank_r, bank_l = self._banks_for(cat)
+        bank = bank_r if cat.body.facing >= 0 else bank_l
+        key = self._anim_key(cat)
+        idx = cat.frame % bank.frame_count(key)
         return (bank.frame(key, idx), bank.accessory_frame(key, idx),
-                self._cat_rect(), self._bubble_rect(), self.cat.brain.bubble)
+                self._cat_rect(cat), self._bubble_rect(cat), cat.brain.bubble)
 
     # -- geometry -------------------------------------------------------------
 
-    def _anim_key(self) -> str:
+    def _anim_key(self, cat: Cat) -> str:
         """Animation state + blink + mood-dependent tail variant (P12a/P8g)."""
-        state = self.cat.anim_state
-        if self.cat.blink_active:
+        state = cat.anim_state
+        if cat.blink_active:
             if state == "stand":
                 return "enjoy"          # same pose, eyes closed
             if state == "sit":
                 return "sit_blink"
         if state in ("stand", "walk"):
-            mood = self.cat.brain.mood
+            mood = cat.brain.mood
             if mood < 40:
                 return state + ":low"   # grumpy: tail low
             if mood < 70:
                 return state + ":mid"   # neutral: tail horizontal
         return state                    # content/happy: tail up (default)
 
-    def _cat_rect(self) -> QRect:
-        pm = self.bank_right.frame(self._anim_key(), 0)
-        return QRect(int(self.cat.body.x) - pm.width() // 2,
-                     int(self.cat.body.y) - pm.height(), pm.width(), pm.height())
+    def _cat_rect(self, cat: Cat) -> QRect:
+        bank_r, _bank_l = self._banks_for(cat)
+        pm = bank_r.frame(self._anim_key(cat), 0)
+        return QRect(int(cat.body.x) - pm.width() // 2,
+                     int(cat.body.y) - pm.height(), pm.width(), pm.height())
 
-    def _bubble_rect(self) -> QRect:
-        if not self.cat.brain.bubble:
+    def _bubble_rect(self, cat: Cat) -> QRect:
+        if not cat.brain.bubble:
             return QRect()
-        pm = self._props[self.cat.brain.bubble]
-        cr = self._cat_rect()
+        pm = self._props[cat.brain.bubble]
+        cr = self._cat_rect(cat)
         bob = int(2.5 * math.sin(self._time * 3.0))
         return QRect(cr.center().x() - pm.width() // 2,
                      cr.top() - pm.height() - 6 + bob, pm.width(), pm.height())
@@ -473,12 +557,13 @@ class Overlay(QWidget):
                               pm.width(), pm.height()), kind))
         return out
 
-    def _door_rect(self) -> QRect:
-        if self._door is None:
+    def _door_rect(self, cat: Cat) -> QRect:
+        d = self._doors.get(cat)
+        if d is None:
             return QRect()
         pm = self._props["cat_door_0"]
-        return QRect(int(self._door[0]) - pm.width() // 2,
-                     int(self._door[1]) - pm.height(), pm.width(), pm.height())
+        return QRect(int(d[0]) - pm.width() // 2,
+                     int(d[1]) - pm.height(), pm.width(), pm.height())
 
     @staticmethod
     def _toy_front(toy) -> bool:
@@ -529,12 +614,20 @@ class Overlay(QWidget):
 
     def _front_bounds(self) -> QRect:
         """World-coords bounding rect of everything the front layer draws:
-        cat, bubble, cat door and the front toys (string/laser/carried —
-        floor toys live on the back layer since P42), margin, minimum size."""
-        r = QRect(self._cat_rect())
-        r = r.united(self._bubble_rect()).united(self._door_rect())
+        the front-level cats, their bubbles, cat doors and the front toys
+        (string/laser/carried — floor toys live on the back layer since P42),
+        margin, minimum size."""
+        r = QRect()
+        for cat in self.cats:
+            if self.cat_layer(cat) == "front":
+                r = r.united(self._cat_rect(cat)).united(self._bubble_rect(cat))
+            # doors are always front-window content, even mid-crossing (P27)
+            r = r.united(self._door_rect(cat))
         for tr in self._toy_rects("front"):  # only front-layer content (P42)
             r = r.united(tr)
+        if r.isNull():
+            # every cat is on the back level: no front content — stay put
+            return QRect(self._win_x, self._win_y, self.width(), self.height())
         r = r.adjusted(-WIN_MARGIN, -WIN_MARGIN, WIN_MARGIN, WIN_MARGIN)
         if r.width() < WIN_MIN_W:
             r.moveLeft(r.center().x() - WIN_MIN_W // 2)
@@ -615,20 +708,25 @@ class Overlay(QWidget):
         if dt <= 0.0:
             return  # zero-length frame (same-millisecond reentry): nothing to do
         self._time += dt
-        old = self._cat_rect().united(self._bubble_rect()).united(self._ghost_rect())
-        old = old.united(self._door_rect())
         # layer-specific regions (P42): a far-away floor toy must not stretch
         # the front window's dirty region into a giant bounding box
-        old_front = QRect(old)
+        old_front = self._ghost_rect()
+        old_back = QRect()
+        for cat in self.cats:
+            r = self._cat_rect(cat).united(self._bubble_rect(cat)) \
+                .united(self._door_rect(cat))
+            if self.cat_layer(cat) == "back":
+                old_back = old_back.united(r)
+            else:
+                old_front = old_front.united(r)
         for r in self._toy_rects("front"):
             old_front = old_front.united(r)
-        old_back = QRect(old)
         for r in self._toy_rects("back"):
             old_back = old_back.united(r)
 
         if self._placing and self._time - self._place_since > 30.0:
             self._end_placement()  # auto-cancel dangling placement
-        if self.cat.brain.state == "wheel_run":
+        if any(c.brain.state == "wheel_run" for c in self.cats):
             self._wheel_angle = (self._wheel_angle + 200.0 * dt) % 360.0
 
         self.desktop.cursor_active = self._detector.tracker.idle_for() < 2.0
@@ -637,38 +735,51 @@ class Overlay(QWidget):
         if self.desktop.cursor_active:
             if self._inactive_since is not None:
                 if self._time - self._inactive_since > 60.0:
-                    self.cat.brain.on_user_return(self.cat.body, self.desktop)
+                    for cat in self.cats:
+                        cat.brain.on_user_return(cat.body, self.desktop)
                 self._inactive_since = None
         elif self._inactive_since is None:
             self._inactive_since = self._time
-        rect = self._cat_rect()
-        events = self._detector.tick(
-            dt, (rect.x(), rect.y(), rect.width(), rect.height()), self.desktop.cursor)
-        for ev in events:
-            if self.debug:
-                print(f"[interact] {ev} speed={self.desktop.cursor_speed:.0f} "
-                      f"state={self.cat.brain.state}")
-            if ev == "stroke":
-                self.cat.brain.on_stroke(self.cat.body)
-            elif ev == "rub":
-                self.cat.brain.on_rub(self.cat.body)
-            elif ev == "hunt":
-                self.cat.brain.on_hunt_trigger(self.cat.body, self.desktop.cursor,
-                                               self.desktop)
-            elif ev == "startle":
-                self.cat.brain.on_startle(self.cat.body, self.desktop)
-            elif ev == "pat":
-                self.cat.brain.on_pat(self.cat.body, self.desktop.cursor)
+        self._update_active()
+        # interactions (P47): the cat UNDER the cursor is ticked first with
+        # the real dt, so its stroke/rub accumulators advance; the others
+        # only watch for teasing (shared detector state must not double-tick)
+        cx, cy = self.desktop.cursor
+        ordered = sorted(
+            self.cats,
+            key=lambda c: 0 if self._cat_rect(c).contains(cx, cy) else 1)
+        for i, cat in enumerate(ordered):
+            rect = self._cat_rect(cat)
+            events = self._detector.tick(
+                dt if i == 0 else 0.0,
+                (rect.x(), rect.y(), rect.width(), rect.height()),
+                self.desktop.cursor)
+            for ev in events:
+                if self.debug:
+                    print(f"[interact] {ev} speed={self.desktop.cursor_speed:.0f} "
+                          f"state={cat.brain.state}")
+                if ev == "stroke":
+                    cat.brain.on_stroke(cat.body)
+                elif ev == "rub":
+                    cat.brain.on_rub(cat.body)
+                elif ev == "hunt":
+                    cat.brain.on_hunt_trigger(cat.body, self.desktop.cursor,
+                                              self.desktop)
+                elif ev == "startle":
+                    cat.brain.on_startle(cat.body, self.desktop)
+                elif ev == "pat":
+                    cat.brain.on_pat(cat.body, self.desktop.cursor)
 
-        self.cat.tick(dt, self.desktop)
-        self.toys.tick(dt, self.desktop, self.cat, self.cat.brain.sounds)
+        for cat in self.cats:
+            cat.tick(dt, self.desktop)
+        fx_sounds: list[str] = []  # toy/hunt intents, not tied to one brain
+        self.toys.tick(dt, self.desktop, self.cats, fx_sounds)
         if self._hunt is not None:  # P42 mini-game session
-            self._hunt.tick(dt, self.desktop, self.cat, self.toys,
-                            self.cat.brain.sounds)
+            self._hunt.tick(dt, self.desktop, self.cats, self.toys, fx_sounds)
             if not self._hunt.active:
                 if self.notify is not None:
                     self.notify("Mouse hunt",
-                                f"Time! Your cat caught {self._hunt.score} "
+                                f"Time! Your cats caught {self._hunt.score} "
                                 f"{'mouse' if self._hunt.score == 1 else 'mice'}.")
                 self._hunt = None
                 self._furn_update_all()  # the leftover mice scurry off
@@ -686,19 +797,23 @@ class Overlay(QWidget):
             self._dbg_t += dt
             if self._dbg_t >= 1.0:
                 self._dbg_t = 0.0
-                cx, cy = self.desktop.cursor
-                r = self._cat_rect()
+                r = self._cat_rect(self.cat)
                 inside = (r.x() <= cx <= r.x() + r.width()
                           and r.y() <= cy <= r.y() + r.height())
                 print(f"[dbg] cursor=({cx},{cy}) cat=({r.x()},{r.y()},{r.width()},"
                       f"{r.height()}) inside={inside} "
                       f"speed={self.desktop.cursor_speed:.0f} "
+                      f"cats={len(self.cats)} "
                       f"catworld=({self.cat.body.x:.0f},{self.cat.body.y:.0f})")
 
         if self.player:
-            for sound in self.cat.brain.sounds:
+            for cat in self.cats:
+                for sound in cat.brain.sounds:
+                    self.player.play(sound)
+            for sound in fx_sounds:
                 self.player.play(sound)
-        self.cat.brain.sounds.clear()
+        for cat in self.cats:
+            cat.brain.sounds.clear()
 
         # only repaint when something visible actually changed (P12c)
         sig = self._signature()
@@ -728,23 +843,32 @@ class Overlay(QWidget):
             self._furn_update(self._status_rect())
         # user notifications (P25): full litter box / vomit on the floor
         if self.notify is not None:
-            st = self.cat.brain.state
-            if st == "litter_beg" and self._prev_brain_state != "litter_beg":
-                self.notify("PlasmaCat", "The litter box is full — please clean it!")
+            for cat in self.cats:
+                st = cat.brain.state
+                if st == "litter_beg" \
+                        and self._prev_brain_state.get(cat) != "litter_beg":
+                    self.notify("PlasmaCat", f"{cat.cust.name}: the litter box "
+                                           "is full — please clean it!")
             if len(self.cat.brain.puke_spots) > self._prev_puke_count:
-                self.notify("PlasmaCat", "Your cat vomited on the floor — "
+                self.notify("PlasmaCat", "A cat vomited on the floor — "
                                        "clean it up (tray menu)!")
-        self._prev_brain_state = self.cat.brain.state
+        self._prev_brain_state = {c: c.brain.state for c in self.cats}
         self._prev_puke_count = len(self.cat.brain.puke_spots)
-        new = self._cat_rect().united(self._bubble_rect()).united(self._ghost_rect())
-        new = new.united(self._door_rect())
-        new_front = QRect(new)
+        new_front = self._ghost_rect()
+        new_back = QRect()
+        for cat in self.cats:
+            r = self._cat_rect(cat).united(self._bubble_rect(cat)) \
+                .united(self._door_rect(cat))
+            if self.cat_layer(cat) == "back":
+                new_back = new_back.united(r)
+            else:
+                new_front = new_front.united(r)
         for r in self._toy_rects("front"):
             new_front = new_front.united(r)
-        new_back = QRect(new)
         for r in self._toy_rects("back"):
             new_back = new_back.united(r)
-        moving = self.cat.body.airborne or self.cat.body.target_x is not None
+        moving = any(c.body.airborne or c.body.target_x is not None
+                     for c in self.cats)
         if sig != self._last_sig:
             self._last_sig = sig
             if self._placing:
@@ -763,14 +887,18 @@ class Overlay(QWidget):
                 self.update(old_front.united(new_front).adjusted(6, 6, 6, 6)
                             .translated(-ox, -oy))
             self._prev_moving = moving
-        # the cat moves between layers: keep the back layer in sync, and let
-        # her pass through the cat door (P27) whenever the level flips
-        back = self.on_back_layer()
-        if back != self._prev_back:
-            self._door = (self.cat.body.x, self.cat.body.y, self._time,
-                          "in" if back else "out")
-        if self._door is not None and self._time - self._door[2] >= DOOR_DUR:
-            self._door = None
+        # the cats move between layers: keep the back layer in sync, and let
+        # them pass through the cat door (P27) whenever the level flips
+        for cat in self.cats:
+            back = self.on_back_layer(cat)
+            if back != self._prev_back.get(cat, False):
+                self._doors[cat] = (cat.body.x, cat.body.y, self._time,
+                                    "in" if back else "out")
+            self._prev_back[cat] = back
+        for cat in list(self._doors):
+            if self._time - self._doors[cat][2] >= DOOR_DUR:
+                del self._doors[cat]
+        any_back = any(self.on_back_layer(c) for c in self.cats)
         # floor toys on the back layer (P42): their motion repaints there too
         back_toy_sig = tuple((t.kind, round(t.x), round(t.y))
                              for t in self.toys.toys if not self._toy_front(t))
@@ -779,22 +907,21 @@ class Overlay(QWidget):
         back_toy_moving = any(not self._toy_front(t)
                               and (abs(t.vx) > 1 or abs(t.vy) > 1)
                               for t in self.toys.toys)
-        furn_moving = (moving and back) or back_toy_moving
+        furn_moving = (moving and any_back) or back_toy_moving
         self._furn_move_ticks = self._furn_move_ticks + 1 if furn_moving else 0
-        if back or back != self._prev_back or self._door is not None \
-                or back_toys_changed:
+        if any_back or self._doors or back_toys_changed:
             if (furn_moving and self._furn_move_ticks % 3 == 0) \
                     or (not furn_moving and self._prev_furn_moving):
                 self._furn_update_all()  # P32 full flush on the back layer
             else:
                 self._furn_update(old_back.united(new_back).adjusted(6, 6, 6, 6))
         self._prev_furn_moving = furn_moving
-        self._prev_back = back
         # the exercise wheel spins on THIS layer: repaint its rect every tick
         # while she runs (P46) — the ring is symmetric, only the red marker
         # shows the angle, and it lives OUTSIDE the cat's repaint region, so
         # region updates never showed the rotation
-        if self.cat.brain.state == "wheel_run" and self.cat.brain.wheel_x is not None:
+        if any(c.brain.state == "wheel_run" for c in self.cats) \
+                and self.cat.brain.wheel_x is not None:
             self._furn_update(self._wheel_rect())
         self._sync_window_geometry()
         if self.debug:
@@ -947,18 +1074,19 @@ class Overlay(QWidget):
         """Everything the status board shows (rounded) — repaint on change."""
         if not self.cust.status_window:
             return ()
-        b = self.cat.brain
+        b = self.active.brain
         r = self._status_rect()
         return (tuple(round(v) for v in b.needs.values()), round(b.food_fill),
                 round(b.litter_fill), len(b.litter_deposits),
-                round(b.attachment_xp), b.attachment_level, self.cust.name,
-                r.x(), r.y())
+                round(b.attachment_xp), b.attachment_level, self.active.cust.name,
+                round(b.age, 1), r.x(), r.y())
 
     def _paint_status(self, p: QPainter) -> None:
         """Draw the board (world coords; the painter is already translated).
         Pure QPainter, display-only: the FurnitureLayer is click-through, so
-        the care actions (treat/refill/clean) stay in the tray menu."""
-        brain = self.cat.brain
+        the care actions (treat/refill/clean) stay in the tray menu. Shows
+        the ACTIVE cat (nearest the cursor, P47)."""
+        brain = self.active.brain
         sr = self._status_rect()
         x, y = sr.x(), sr.y()
         p.setPen(QPen(QColor(80, 80, 96, 220), 1))
@@ -969,8 +1097,8 @@ class Overlay(QWidget):
         p.setFont(font)
         p.setPen(QColor(240, 240, 240))
         p.drawText(x + 12, y + 20,
-                   f"{self.cust.name} — {brain.attachment_name} "
-                   f"({int(brain.attachment_xp)} XP)")
+                   f"{self.active.cust.name} — {brain.life_stage} — "
+                   f"{brain.attachment_name} ({int(brain.attachment_xp)} XP)")
         font.setBold(False)
         p.setFont(font)
         rows = [(label, brain.needs[key]) for key, label in
@@ -1011,13 +1139,15 @@ class Overlay(QWidget):
     # -- user control mode (P42) -------------------------------------------------
 
     def _on_key_event(self, name: str) -> None:
-        self.cat.brain.on_key_event(name)
+        self.active.brain.on_key_event(name)
 
     def set_user_control(self, on: bool) -> None:
-        """Tray toggle: WASD/arrows drive the cat. The bridge registers the
-        global shortcuts only while the mode is on (they grab keys
-        system-wide — no shortcuts, no steering)."""
-        self.cat.brain.set_user_control(on)
+        """Tray toggle: WASD/arrows drive the ACTIVE cat (the one nearest the
+        cursor, P47). The bridge registers the global shortcuts only while
+        the mode is on (they grab keys system-wide — no shortcuts, no
+        steering)."""
+        self._control_on = on
+        self._update_active()  # the user_control flags follow the active cat
         self._bridge.set_control_mode(on)
 
     # -- mini-games (P42) ---------------------------------------------------------
@@ -1047,12 +1177,13 @@ class Overlay(QWidget):
         if on:
             cx, cy = self.desktop.cursor
             self.toys.spawn("laser", float(cx), float(cy))
-            self.cat.brain.sounds.append("chirp")  # get her attention
+            self.active.brain.sounds.append("chirp")  # get her attention
         else:
             self.toys.remove("laser")
-            if self.cat.brain.state in ("laser_chase", "laser_pounce"):
-                self.cat.brain.state = "idle"
-                self.cat.brain.state_left = 0.0
+            for cat in self.cats:
+                if cat.brain.state in ("laser_chase", "laser_pounce"):
+                    cat.brain.state = "idle"
+                    cat.brain.state_left = 0.0
             self.update()  # see toggle_string
 
     def clear_toys(self) -> None:
@@ -1061,7 +1192,8 @@ class Overlay(QWidget):
         and left ghost pixels in the translucent buffers (P42). Also drops
         toy-targeting brain states and syncs the tray checkmarks."""
         self.toys.toys.clear()
-        self.cat.brain.clear_toy_state()
+        for cat in self.cats:
+            cat.brain.clear_toy_state()
         self._hunt = None  # an active mouse hunt ends with its mice (P42)
         for act in (getattr(self, "_string_action", None),
                     getattr(self, "_laser_action", None)):
@@ -1072,11 +1204,17 @@ class Overlay(QWidget):
 
     def _signature(self) -> tuple:
         """Everything that can change what's on screen. Repaint only on change."""
-        c = self.cat
-        ph = self._door_phase()
+        per_cat = []
+        for c in self.cats:
+            per_cat.append((
+                self._anim_key(c), c.frame, int(c.body.x), int(c.body.y),
+                c.body.facing, c.brain.bubble, c.blink_active,
+                self.cat_layer(c), c.brain.stage,
+                # the bubble's bob phase: missing this caused stale streaks
+                int(2.5 * math.sin(self._time * 3.0)) if c.brain.bubble else 0,
+            ))
         return (
-            self._anim_key(), c.frame, int(c.body.x), int(c.body.y), c.body.facing,
-            c.brain.bubble, c.blink_active, self._placing, self.cat_layer(),
+            tuple(per_cat), self._placing,
             # only FRONT toys: floor toys on the back layer have their own
             # back_toy_sig and must not repaint this window (P42). Carried
             # flips + laser blink (visible) change the pixels without
@@ -1084,33 +1222,34 @@ class Overlay(QWidget):
             tuple((t.kind, round(t.x), round(t.y), bool(getattr(t, "carried", False)),
                    getattr(t, "visible", True))
                   for t in self.toys.toys if self._toy_front(t)),
-            round(self._wheel_angle), c.brain.wheel_x,
-            # the bubble's bob phase: missing this caused stale-bubble streaks
-            int(2.5 * math.sin(self._time * 3.0)) if c.brain.bubble else 0,
-            # the cat door animation frame (P27)
-            int(ph * 5) if ph >= 0 else -1,
+            round(self._wheel_angle), self.cat.brain.wheel_x,
+            # the cat door animation frames (P27)
+            tuple(int(self._door_phase(c) * 5) if self._door_phase(c) >= 0 else -1
+                  for c in self._doors),
         )
 
     def _is_active(self) -> bool:
-        b = self.cat.body
-        if b.airborne or b.target_x is not None or self._placing or self.cat.blink_active:
-            return True
-        if self.cat.brain.user_control:
-            return True  # P42: steering must stay at 30 fps
-        if self._door is not None:
-            return True  # the flap must animate smoothly (P27)
-        if self.cat.anim_state in ("walk", "run", "jump", "scratch", "wiggle",
-                                   "tail_lash", "knead", "cover", "drink",
-                                   "stretch", "yawn", "retch"):
-            return True
-        if self.cat.brain.state in ("wheel_run", "hunt_pounce", "hunt_stalk",
-                                    "scratching", "startle_air"):
-            return True
+        if self._placing or self._doors:
+            return True  # placement + door flaps must animate smoothly (P27)
+        for cat in self.cats:
+            b = cat.body
+            if b.airborne or b.target_x is not None or cat.blink_active:
+                return True
+            if cat.brain.user_control:
+                return True  # P42: steering must stay at 30 fps
+            if cat.anim_state in ("walk", "run", "jump", "scratch", "wiggle",
+                                  "tail_lash", "knead", "cover", "drink",
+                                  "stretch", "yawn", "retch"):
+                return True
+            if cat.brain.state in ("wheel_run", "hunt_pounce", "hunt_stalk",
+                                   "scratching", "startle_air"):
+                return True
         if any(abs(t.vx) > 1 or abs(t.vy) > 1 for t in self.toys.toys):
             return True
-        # interactions near the cat stay responsive even when it idles
+        # interactions near a cat stay responsive even when she idles
         cx, cy = self.desktop.cursor
-        near = abs(cx - b.x) < 300 and abs(cy - b.y) < 300
+        near = any(abs(cx - c.body.x) < 300 and abs(cy - c.body.y) < 300
+                   for c in self.cats)
         return near and self.desktop.cursor_active
 
     # -- drawing ------------------------------------------------------------
@@ -1137,18 +1276,19 @@ class Overlay(QWidget):
                 for plat in self.desktop.platforms:
                     p.drawLine(int(plat.x0), int(plat.y), int(plat.x1), int(plat.y))
             # (exercise wheel lives entirely on the FurnitureLayer since P23)
-            # cat (only when she's on the front level; the FurnitureLayer draws
-            # her when she has stepped back to the furniture level)
-            if self.cat_layer() == "front":
-                bank = self.bank_right if self.cat.body.facing >= 0 else self.bank_left
-                key = self._anim_key()
-                frame_idx = self.cat.frame % bank.frame_count(key)
-                frame = bank.frame(key, frame_idx)
-                cr = self._cat_rect()
+            # cats (only the front-level ones; the FurnitureLayer draws the
+            # ones that have stepped back to the furniture level)
+            for cat in self.cats:
+                if self.cat_layer(cat) != "front":
+                    continue
+                frame, acc, cr, br, bubble = self.current_cat(cat)
                 p.drawPixmap(cr.x(), cr.y(), frame)
-                acc = bank.accessory_frame(key, frame_idx)
                 if acc is not None:
                     p.drawPixmap(cr.x(), cr.y(), acc)
+                # thought bubble (front level only; the back level draws it
+                # with the cat)
+                if bubble:
+                    p.drawPixmap(br.x(), br.y(), self._props[bubble])
             # (wheel front arc is drawn on the FurnitureLayer with the wheel)
             # toys — only the front layer's share (string/laser/carried, P42);
             # resting floor toys are drawn by the FurnitureLayer behind windows
@@ -1175,18 +1315,16 @@ class Overlay(QWidget):
                     pm = self._props[toy.kind]
                     p.drawPixmap(int(toy.x) - pm.width() // 2,
                                  int(toy.y) - pm.height(), pm)
-            # thought bubble (front level only; back level draws it with the cat)
-            if self.cat.brain.bubble and self.cat_layer() == "front":
-                br = self._bubble_rect()
-                p.drawPixmap(br.x(), br.y(), self._props[self.cat.brain.bubble])
-            # the cat door (P27): a flapping portal at the level-crossing point
-            ph = self._door_phase()
-            if ph >= 0 and self._door is not None:
-                dx, dy = self._door[0], self._door[1]
+            # thought bubbles are drawn with their cats above (front level)
+            # the cat doors (P27): a flapping portal at the crossing point
+            for cat, d in self._doors.items():
+                ph = self._door_phase(cat)
+                if ph < 0:
+                    continue
                 frame = ("cat_door_0", "cat_door_1", "cat_door_2",
                          "cat_door_2", "cat_door_1")[min(int(ph * 5), 4)]
                 pm = self._props[frame]
-                p.drawPixmap(int(dx) - pm.width() // 2, int(dy) - pm.height(), pm)
+                p.drawPixmap(int(d[0]) - pm.width() // 2, int(d[1]) - pm.height(), pm)
             # placement ghost + hint
             if self._placing:
                 gr = self._ghost_rect()

@@ -21,6 +21,57 @@ from __future__ import annotations
 CANVAS_W = 64
 CANVAS_H = 48
 
+# -- growth stages (P47) -------------------------------------------------------
+# 16 life stages: 0 = kitten … 5 = grown, 6-10 = prime adult, 11+ = senior,
+# 15 = very old. The sprites are NOT redrawn per stage: every pose is built
+# through the same procedural code, and the Canvas applies the stage's
+# proportions as a continuous coordinate transform (feet stay on the bottom
+# row, heads grow/shrink smoothly — no silhouette gaps).
+STAGES = 16
+_HEAD_WARP_R = 20.0      # radius of the smooth head-size warp field
+_HEAD_SURFACE = 10.5     # reference head radius (poses draw ~10.5px heads)
+
+
+def stage_profile(stage: int) -> dict[str, float]:
+    """Proportions for a life stage: overall scale, head-size factor, hunch
+    (extra vertical squash for the old, stiff cats)."""
+    s = min(max(int(stage), 0), STAGES - 1)
+    if s <= 5:                     # growing up: kitten -> adult
+        t = s / 5.0
+        return {"scale": 0.55 + 0.45 * t,   # 0.55 -> 1.0
+                "head": 1.50 - 0.50 * t,    # huge kitten head -> adult
+                "hunch": 1.0}
+    if s <= 10:                    # prime adult
+        return {"scale": 1.0, "head": 1.0, "hunch": 1.0}
+    t = (s - 10) / 5.0             # senior: shrinking + hunched
+    return {"scale": 1.0 - 0.06 * t,        # 0.94 at 15
+            "head": 1.0 - 0.04 * t,         # 0.96 at 15
+            "hunch": 1.0 - 0.05 * t}        # 0.95 at 15
+
+
+# Build-time only: the profile the next _build() call renders with. Poses read
+# it through Canvas; NOT part of any runtime state.
+_PROFILE = stage_profile(6)
+
+
+def aged_palette(palette: dict[str, tuple[int, int, int]],
+                 stage: int) -> dict[str, tuple[int, int, int]]:
+    """Seniors grey out: fur slots blend toward their own luminance from
+    stage 11 on (up to 45% at 15). Eyes/outline keep their color."""
+    s = min(max(int(stage), 0), STAGES - 1)
+    if s < 11:
+        return palette
+    t = (s - 10) / 5.0 * 0.45
+    out = dict(palette)
+    for k in ("f", "F", "b"):
+        r, g, b = out[k]
+        grey = (r + g + b) / 3.0
+        out[k] = (int(round(r + (grey - r) * t)),
+                  int(round(g + (grey - g) * t)),
+                  int(round(b + (grey - b) * t)))
+    return out
+
+
 DEFAULT_PALETTE: dict[str, tuple[int, int, int]] = {
     "o": (40, 30, 30),        # outline
     "f": (230, 145, 60),      # fur
@@ -36,14 +87,48 @@ DEFAULT_PALETTE: dict[str, tuple[int, int, int]] = {
 class Canvas:
     def __init__(self) -> None:
         self.g = [["."] * CANVAS_W for _ in range(CANVAS_H)]
+        self._hz: tuple[float, float] | None = None  # head warp center (P47)
+
+    def head_zone(self, hx: float, hy: float) -> None:
+        """Register the head center for the growth-stage warp. draw_ears does
+        this automatically; poses with inline ears call it explicitly."""
+        self._hz = (hx, hy)
+
+    def _map(self, x: float, y: float) -> tuple[float, float]:
+        """Growth-stage transform (P47), applied to every drawing coordinate:
+        1. a smooth radial warp around the head (kitten: big head; the field
+           falls off to 0 at _HEAD_WARP_R so body and head stay connected),
+        2. a global scale anchored at the feet (bottom row stays the feet).
+        Stage 6 is the identity — adult sprites are byte-identical to before."""
+        if self._hz is not None:
+            target = _PROFILE["head"]
+            if target != 1.0:
+                hx, hy = self._hz
+                dx, dy = x - hx, y - hy
+                d = (dx * dx + dy * dy) ** 0.5
+                if 0.0 < d < _HEAD_WARP_R:
+                    k = (target - 1.0) * (1.0 - d / _HEAD_WARP_R) \
+                        / (1.0 - _HEAD_SURFACE / _HEAD_WARP_R)
+                    x += dx * k
+                    y += dy * k
+        s = _PROFILE["scale"]
+        if s != 1.0 or _PROFILE["hunch"] != 1.0:
+            x = CANVAS_W / 2 + (x - CANVAS_W / 2) * s
+            y = CANVAS_H - (CANVAS_H - y) * s * _PROFILE["hunch"]
+        return x, y
 
     def set(self, x: float, y: float, ch: str) -> None:
+        x, y = self._map(x, y)
         x, y = int(round(x)), int(round(y))
         if 0 <= x < CANVAS_W and 0 <= y < CANVAS_H:
             self.g[y][x] = ch
 
     def get(self, x: int, y: int) -> str:
-        return self.g[y][x]
+        x, y = self._map(x, y)
+        x, y = int(round(x)), int(round(y))
+        if 0 <= x < CANVAS_W and 0 <= y < CANVAS_H:
+            return self.g[y][x]
+        return "."
 
     def rect(self, x0: float, y0: float, x1: float, y1: float, ch: str) -> None:
         for y in range(int(round(y0)), int(round(y1)) + 1):
@@ -79,6 +164,7 @@ class Canvas:
                     self.set(x, y, ch)
 
     def auto_outline(self) -> None:
+        self._heal()  # close warp tears first, or they get outlined (P47)
         add = []
         for y in range(CANVAS_H):
             for x in range(CANVAS_W):
@@ -94,7 +180,23 @@ class Canvas:
         for x, y in add:
             self.g[y][x] = "o"
 
+    def _heal(self) -> None:
+        """Fill isolated 1px holes: the growth-stage warp maps integer cells
+        with rounding, which can tear small features (pupil, nose). A hole
+        with 3+ orthogonal neighbors of the same color takes that color."""
+        for y in range(1, CANVAS_H - 1):
+            for x in range(1, CANVAS_W - 1):
+                if self.g[y][x] != ".":
+                    continue
+                nb = (self.g[y - 1][x], self.g[y + 1][x],
+                      self.g[y][x - 1], self.g[y][x + 1])
+                for ch in ("e", "n", "f", "F", "b", "a"):
+                    if nb.count(ch) >= 3:
+                        self.g[y][x] = ch
+                        break
+
     def rows(self) -> list[str]:
+        self._heal()  # face details are drawn after auto_outline: heal again
         return ["".join(r) for r in self.g]
 
 
@@ -131,7 +233,9 @@ def draw_whiskers(c: Canvas, hx: float, hy: float) -> None:
 
 def draw_ears(c: Canvas, hx: float, hy: float, back_dx: int = -7, front_dx: int = 3) -> None:
     """Two tall, pointy ears (attentive cat) on a head centered near (hx, hy).
-    Drawn BEFORE the head ellipse so the ear bases merge into the skull."""
+    Drawn BEFORE the head ellipse so the ear bases merge into the skull.
+    Also registers the head center for the growth-stage warp (P47)."""
+    c.head_zone(hx, hy)
     c.triangle(hx + back_dx - 2, hy - 3, hx + back_dx + 2, hy - 15, hx + back_dx + 5, hy - 3, "f")
     c.triangle(hx + front_dx - 2, hy - 3, hx + front_dx + 3, hy - 15, hx + front_dx + 7, hy - 3, "f")
     # inner ears
@@ -381,6 +485,7 @@ def pose_ear_fold() -> list[str]:
     c = Canvas()
     cx, cy = 30.0, 34.0
     hx, hy = 41.0, 17.0
+    c.head_zone(hx, hy)  # inline ears here: register the warp center (P47)
     c.ellipse(cx, cy, 16.0, 12.0, "f")
     c.ellipse(cx - 3, cy + 8, 16.0, 7.0, "f")
     draw_tail(c, cx - 14, CANVAS_H - 5, (cx + 20, CANVAS_H - 5))
@@ -573,6 +678,7 @@ def pose_sleep_belly(breath: int = 0) -> list[str]:
     c = Canvas()
     lift = breath
     cx, cy = 32.0, 41.0
+    c.head_zone(13.0, 40.0)  # head lies sideways at the left (P47 warp)
     # body flat on the ground, belly side UP
     c.ellipse(cx, cy, 20.0, 6.5, "f")
     c.ellipse(cx, cy - 2 - lift, 13.0, 4.5, "b")   # exposed belly on top
@@ -739,6 +845,7 @@ def pose_watch(phase: int = 0, collar: bool = False) -> list[str]:
     cx, cy = 30.0, 34.0
     hx, hy = 41.0, 17.0
     tilt = 3 if phase else 0
+    c.head_zone(hx + tilt, hy + tilt * 0.5)  # inline tilt ears (P47 warp)
     c.ellipse(cx, cy, 16.0, 12.0, "f")
     c.ellipse(cx - 3, cy + 8, 16.0, 7.0, "f")
     c.rect(cx + 8, cy + 2, cx + 11, CANVAS_H - 1, "f")
@@ -848,7 +955,7 @@ def pose_paw_bat(phase: int = 0, collar: bool = False) -> list[str]:
 # Animation table
 # ---------------------------------------------------------------------------
 
-def _build(collar: bool = False) -> dict[str, list[list[str]]]:
+def _build_table(collar: bool = False) -> dict[str, list[list[str]]]:
     return {
         "stand": [pose_stand(collar=collar), pose_stand(tail_tip=(3.0, 10.0), collar=collar)],
         "walk": [pose_stand(leg_phase=p, collar=collar) for p in range(4)],
@@ -906,6 +1013,18 @@ def _build(collar: bool = False) -> dict[str, list[list[str]]]:
     }
 
 
+def _build(collar: bool = False, stage: int = 6) -> dict[str, list[list[str]]]:
+    """Build the full animation table with a growth stage's proportions (P47).
+    The default stage 6 is the identity transform = the classic adult art."""
+    global _PROFILE
+    old = _PROFILE
+    _PROFILE = stage_profile(stage)
+    try:
+        return _build_table(collar)
+    finally:
+        _PROFILE = old
+
+
 SPRITES: dict[str, list[list[str]]] = _build(collar=False)
 _COLLARED = _build(collar=True)
 
@@ -924,6 +1043,32 @@ def _diff_layers(base: dict, collared: dict) -> dict[str, list[list[str]]]:
 
 
 ACCESSORIES: dict[str, list[list[str]]] = _diff_layers(SPRITES, _COLLARED)
+
+# Per-stage tables, built and cached on first use (P47). Stage 6 is served
+# from the shared SPRITES/ACCESSORIES above (byte-identical legacy art).
+_SPRITES_BY_STAGE: dict[int, dict[str, list[list[str]]]] = {}
+_ACCESSORIES_BY_STAGE: dict[int, dict[str, list[list[str]]]] = {}
+
+
+def sprites_for(stage: int) -> dict[str, list[list[str]]]:
+    """The animation table for a growth stage (0-15)."""
+    s = min(max(int(stage), 0), STAGES - 1)
+    if s == 6:
+        return SPRITES
+    if s not in _SPRITES_BY_STAGE:
+        base = _build(collar=False, stage=s)
+        _SPRITES_BY_STAGE[s] = base
+        _ACCESSORIES_BY_STAGE[s] = _diff_layers(base, _build(collar=True, stage=s))
+    return _SPRITES_BY_STAGE[s]
+
+
+def accessories_for(stage: int) -> dict[str, list[list[str]]]:
+    """The collar diff layers for a growth stage (0-15)."""
+    s = min(max(int(stage), 0), STAGES - 1)
+    if s == 6:
+        return ACCESSORIES
+    sprites_for(s)  # builds both caches
+    return _ACCESSORIES_BY_STAGE[s]
 
 
 # ---------------------------------------------------------------------------
@@ -967,8 +1112,8 @@ def apply_pattern(frame: list[str], pattern: str) -> list[str]:
 # Runtime helpers
 # ---------------------------------------------------------------------------
 
-def validate() -> None:
-    for name, frames in SPRITES.items():
+def validate(table: dict[str, list[list[str]]] | None = None) -> None:
+    for name, frames in (SPRITES if table is None else table).items():
         for frame in frames:
             assert len(frame) == CANVAS_H, f"{name}: {len(frame)} rows != {CANVAS_H}"
             for row in frame:

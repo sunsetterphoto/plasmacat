@@ -26,6 +26,14 @@ attached to you over time.
 - **Attachment progression**: from stray to inseparable. High-trust cats
   sleep belly-up and bring you "gifts" (carries the plush mouse to your
   cursor).
+- **Raise her from a kitten**: cats age through 16 growth stages (0 kitten …
+  15 very old) — the sprite proportions change with every stage (big kitten
+  head, greying seniors). Good food and sleep slow the clock down, playing
+  and petting keep her young longer, and a neglected cat ages faster.
+- **Multi-cat household**: tray "Add kitten…" brings home up to 4 cats —
+  each with her own look, needs and personality, all sharing the same bowls,
+  furniture and litter box. The status board, treats and control mode follow
+  the cat nearest your cursor.
 - **Customizable**: first-run wizard for name, fur color, pattern (solid,
   tabby, tuxedo, spots, tortie), eyes and collar — recolorable anytime.
 - **Stuff to play with**: ball (bouncy physics), plush mouse, string — and a

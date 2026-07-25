@@ -177,14 +177,14 @@ def main() -> None:
     assert pal["f"] == (100, 50, 25)
     assert pal["F"] == (72, 36, 18), pal["F"]  # derived shade = fur * 0.72
     assert pal["a"] == (9, 9, 9)
-    st = persist.GameState(customization=cust, needs={"hunger": 50.0},
-                           attachment_xp=42.0)
+    st = persist.GameState(cats=[persist.CatState(
+        customization=cust, needs={"hunger": 50.0}, attachment_xp=42.0)])
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "save.json"
         persist.save(p, st)
         st2 = persist.load(p)
     assert st2 is not None
-    assert st2.customization.name == "Test" and st2.attachment_xp == 42.0
+    assert st2.customization.name == "Test" and st2.cats[0].attachment_xp == 42.0
     assert st2.customization.fur == (100, 50, 25)
     decayed = persist.offline_decay({"hunger": 50.0}, time.time() - 3600,
                                     {"hunger": 100 / 5400.0})
@@ -1114,8 +1114,8 @@ def main() -> None:
     # persistence round-trip (P39 status flag + P40 deposits)
     from pathlib import Path
     import tempfile
-    from plasmacat.persist import Customization, GameState, load, save
-    st = GameState(customization=Customization(status_window=True),
+    from plasmacat.persist import CatState, Customization, GameState, load, save
+    st = GameState(cats=[CatState(customization=Customization(status_window=True))],
                    litter_fill=1.5, litter_deposits=["poop", "pee"])
     with tempfile.TemporaryDirectory() as td:
         save(Path(td) / "save.json", st)
@@ -1183,8 +1183,8 @@ def main() -> None:
     catC2.tick(DT, dC)
     assert dC.floor_x0 + 30 <= toyC2.x <= dC.floor_x1 - 30, toyC2.x
     # 4. status board position persists (P42)
-    st2 = GameState(customization=Customization(status_window=True,
-                                                status_pos=[100.0, 200.0]))
+    st2 = GameState(cats=[CatState(customization=Customization(
+        status_window=True, status_pos=[100.0, 200.0]))])
     with tempfile.TemporaryDirectory() as td:
         save(Path(td) / "s2.json", st2)
         back2 = load(Path(td) / "s2.json")
@@ -1300,6 +1300,138 @@ def main() -> None:
         rb2.tick_physics(0.066, dR)
     assert rb2.y == dR.floor_y_at(rb2.x), "ball must land on the new floor"
     print("P43: resting ball OK")
+
+    # -- P47: lifecycle (aging stages, care) + multi-cat household -------------
+    import json
+
+    from plasmacat.cat.brain import CARE_EMPTY_S, Household, offline_aging
+
+    # the growth-stage sprite tables: all 16 valid, adults byte-identical
+    for s in range(sprites.STAGES):
+        sprites.validate(sprites.sprites_for(s))
+    assert sprites.sprites_for(6) is sprites.SPRITES
+    # kittens are smaller than adults; seniors grey out
+    def _filled(stage: int) -> int:
+        return sum(ch != "." for row in sprites.sprites_for(stage)["stand"][0]
+                   for ch in row)
+    assert _filled(0) < _filled(6) * 0.6, (_filled(0), _filled(6))
+    pal_old = sprites.aged_palette(dict(sprites.DEFAULT_PALETTE), 15)
+    assert pal_old["f"] != sprites.DEFAULT_PALETTE["f"]
+    assert sprites.aged_palette(sprites.DEFAULT_PALETTE, 8) == sprites.DEFAULT_PALETTE
+
+    # aging clock: well-fed + rested + loved < neglected
+    catA1 = Cat(400, 1080, rng=random.Random(950))
+    dA1 = DesktopState(1920, 1080)
+    catA1.brain.needs["hunger"] = 90.0
+    catA1.brain.needs["energy"] = 90.0
+    catA1.brain.care = 1.0
+    catA1.brain.age = 6.0  # in the young-adult band: care stretches it
+    cared_rate = catA1.brain._aging_rate()
+    catA1.brain.needs["hunger"] = 10.0
+    catA1.brain.needs["energy"] = 10.0
+    catA1.brain.care = 0.0
+    neglected_rate = catA1.brain._aging_rate()
+    assert neglected_rate > 3.0 * cared_rate, (cared_rate, neglected_rate)
+    # the clock advances in tick and caps at AGE_MAX
+    catA1.brain.age = 14.9999
+    for _ in range(int(20 / DT)):
+        catA1.tick(DT, dA1)
+        catA1.brain.sounds.clear()
+    assert 14.9999 < catA1.brain.age <= 15.0, catA1.brain.age
+    assert catA1.brain.stage == 15
+    # care is refilled by attention and drains over time
+    catA2 = Cat(400, 1080, rng=random.Random(951))
+    catA2.brain.care = 0.2
+    catA2.brain.on_stroke(catA2.body)
+    assert catA2.brain.care > 0.25, catA2.brain.care
+    care0 = catA2.brain.care
+    catA2.brain.tick(CARE_EMPTY_S * 0.5, catA2.body, dA1)  # one giant step
+    assert catA2.brain.care < care0
+    # interaction stretches the young-adult band specifically
+    catA2.brain.age = 6.0
+    catA2.brain.care = 1.0
+    in_band = catA2.brain._aging_rate()
+    catA2.brain.age = 12.0
+    out_band = catA2.brain._aging_rate()
+    assert out_band > in_band, (in_band, out_band)
+    # offline aging: care drains away, gain capped at one stage
+    age2, care2 = offline_aging(6.0, 1.0, 30 * 24 * 3600.0)
+    assert care2 == 0.0 and age2 == 7.0, (age2, care2)
+    # stage temperament: kittens skip the wheel, seniors skip zoomies
+    catA3 = Cat(400, 1080, rng=random.Random(952))
+    catA3.brain.wheel_x = 1000.0
+    catA3.brain.age = 1.0
+    assert catA3.brain._score("exercise", dA1) == 0.0
+    catA3.brain.age = 6.0
+    assert catA3.brain._score("exercise", dA1) > 0.0
+    catA3.brain.age = 12.0
+    assert catA3.brain._score("hop", dA1) == 0.0
+    catA3.brain.litter_x = 900.0
+    catA3.brain.needs["bladder"] = 20.0
+    catA3.brain._start("litter", catA3.body, dA1)
+    assert catA3.brain.state == "to_litter", catA3.brain.state  # no zoomies
+    # speed: kittens toddle, seniors shuffle
+    catA3.brain.age = 0.0
+    assert catA3.brain.speed_mult < 1.0
+    catA3.brain.age = 15.0
+    assert catA3.brain.speed_mult < 0.75
+
+    # the household is shared: both cats eat from the same bowl
+    house = Household()
+    catH1 = Cat(400, 1080, rng=random.Random(953), household=house)
+    catH2 = Cat(600, 1080, rng=random.Random(954), household=house)
+    catH1.brain.food_x = 500.0
+    assert catH2.brain.food_x == 500.0, "bowl position not shared"
+    catH2.brain.food_fill = 42.0
+    assert catH1.brain.food_fill == 42.0, "bowl fill not shared"
+    assert catH1.brain.household is house and catH2.brain.household is house
+    # ...but needs/age/care stay personal
+    catH1.brain.needs["hunger"] = 11.0
+    assert catH2.brain.needs["hunger"] != 11.0
+    catH1.brain.age = 0.0
+    assert catH2.brain.age == 6.0
+    # a private brain (tests, single-cat) keeps its own furniture state
+    catSolo = Cat(400, 1080, rng=random.Random(955))
+    catSolo.brain.food_x = 111.0
+    assert house.food_x == 500.0, "private brain leaked into the household"
+
+    # persistence v2: two cats round-trip; legacy v1 migrates to one adult
+    custB = persist.Customization(name="Findus", fur=(60, 60, 70),
+                                  pattern="tuxedo")
+    st47 = persist.GameState(
+        cats=[persist.CatState(customization=cust, needs={"hunger": 50.0},
+                               attachment_xp=42.0, age=6.0, care=0.7,
+                               fav_toy="ball"),
+              persist.CatState(customization=custB, needs={"hunger": 90.0},
+                               attachment_xp=1.0, age=0.5, care=0.2,
+                               fav_toy="plush")],
+        food_fill=33.0)
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "save.json"
+        persist.save(p, st47)
+        st47b = persist.load(p)
+    assert st47b is not None and len(st47b.cats) == 2
+    assert st47b.cats[0].customization.name == "Test"
+    assert st47b.cats[1].customization.name == "Findus"
+    assert st47b.cats[1].age == 0.5 and st47b.cats[0].care == 0.7
+    assert st47b.cats[1].fav_toy == "plush"
+    assert st47b.customization.name == "Test"  # compat property = primary
+    assert st47b.food_fill == 33.0
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "save.json"
+        p.write_text(json.dumps({  # a v1 save: single cat at the top level
+            "version": 1,
+            "customization": {"name": "Oldcat", "fur": [1, 2, 3]},
+            "needs": {"hunger": 66.0}, "attachment_xp": 123.0,
+            "fav_toy": "ball", "food_fill": 55.0, "saved_at": 1.0,
+        }))
+        legacy = persist.load(p)
+    assert legacy is not None and len(legacy.cats) == 1
+    assert legacy.cats[0].customization.name == "Oldcat"
+    assert legacy.cats[0].age == 6.0, "migrated cat must stay adult"
+    assert legacy.cats[0].attachment_xp == 123.0
+    assert legacy.food_fill == 55.0
+    print("P47: lifecycle stages + aging + household + persistence OK")
 
     print("SIM_TEST_OK")
 

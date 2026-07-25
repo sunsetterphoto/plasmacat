@@ -247,31 +247,44 @@ class ToyManager:
                 best, best_d = t, d
         return best
 
-    def tick(self, dt: float, desktop: DesktopState, cat, sounds: list[str]) -> None:
+    def tick(self, dt: float, desktop: DesktopState, cats, sounds: list[str]) -> None:
+        """cats: a single Cat or a list of them (P47 multi-cat)."""
+        if not isinstance(cats, list):
+            cats = [cats]
         self._time += dt
         for toy in self.toys:
             if getattr(toy, "carried", False):
-                # riding in the cat's mouth: gift delivery (P26)
-                toy.x = cat.body.x + cat.body.facing * 45
-                toy.y = cat.body.y - 42
+                # riding in a cat's mouth: gift delivery (P26). The carrier
+                # is whichever brain holds it as its gift (P47).
+                carrier = next((c for c in cats if c.brain._gift_toy is toy), None)
+                if carrier is None:
+                    toy.carried = False  # the carrier lost interest: drop it
+                    continue
+                toy.x = carrier.body.x + carrier.body.facing * 45
+                toy.y = carrier.body.y - 42
                 toy.vx = toy.vy = 0.0
                 continue
             if toy.kind == "string":
                 toy.anchor = desktop.cursor
             if isinstance(toy, Mouse):
-                bounced = toy.tick_physics(dt, desktop, cat, self.rng)
+                # flees the nearest cat (P47)
+                near = min(cats, key=lambda c: abs(c.body.x - toy.x))
+                bounced = toy.tick_physics(dt, desktop, near, self.rng)
             else:
                 bounced = toy.tick_physics(dt, desktop)
             if bounced:
                 sounds.append("boing")
-            # cat bats the ball when close and facing it
+            # cats bat the ball when close and facing it
             if toy.kind == "ball" and self._time - toy.last_bat > 0.8:
-                d = abs(cat.body.x - toy.x)
-                same_level = abs(cat.body.y - toy.y) < 40
-                facing_it = (cat.body.facing > 0) == (toy.x >= cat.body.x)
-                if d < BAT_RANGE and same_level and facing_it and not cat.body.airborne:
-                    toy.bat(cat.body.x, desktop, power=self.rng.uniform(0.7, 1.3))
-                    toy.last_bat = self._time
-                    sounds.append("boing")
-                    cat.brain.gain("play", 4)
-                    cat.brain.add_xp(0.5, "ball bat")
+                for cat in cats:
+                    d = abs(cat.body.x - toy.x)
+                    same_level = abs(cat.body.y - toy.y) < 40
+                    facing_it = (cat.body.facing > 0) == (toy.x >= cat.body.x)
+                    if d < BAT_RANGE and same_level and facing_it \
+                            and not cat.body.airborne:
+                        toy.bat(cat.body.x, desktop, power=self.rng.uniform(0.7, 1.3))
+                        toy.last_bat = self._time
+                        sounds.append("boing")
+                        cat.brain.gain("play", 4)
+                        cat.brain.add_xp(0.5, "ball bat")
+                        break

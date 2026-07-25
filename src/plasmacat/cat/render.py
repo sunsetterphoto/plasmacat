@@ -28,12 +28,15 @@ def prop_pixmap(name: str, scale: int = 3) -> QPixmap:
 class SpriteBank:
     def __init__(self, palette: dict[str, tuple[int, int, int]] | None = None,
                  pattern: str = "solid", scale: int = 4, facing: str = "right",
-                 accessory: bool = False) -> None:
-        self.palette = dict(palette or sprites.DEFAULT_PALETTE)
+                 accessory: bool = False, stage: int = 6) -> None:
+        # seniors grey out (P47): the palette ages with the growth stage
+        self.palette = sprites.aged_palette(dict(palette or sprites.DEFAULT_PALETTE),
+                                            stage)
         self.pattern = pattern
         self.scale = scale
         self.facing = facing
         self.accessory = accessory
+        self.stage = stage
         self._cache: dict[tuple[str, int], QPixmap] = {}
         self._acc_cache: dict[tuple[str, int], QPixmap] = {}
 
@@ -51,7 +54,7 @@ class SpriteBank:
         key = (state, index)
         pm = self._cache.get(key)
         if pm is None:
-            mat = sprites.SPRITES[state][index % self.frame_count(state)]
+            mat = sprites.sprites_for(self.stage)[state][index % self.frame_count(state)]
             mat = sprites.apply_pattern(mat, self.pattern)
             if self.facing == "left":
                 mat = sprites.flip(mat)
@@ -66,7 +69,7 @@ class SpriteBank:
             return None
         key = (state, index)
         if key not in self._acc_cache:
-            layers = sprites.ACCESSORIES[state]
+            layers = sprites.accessories_for(self.stage)[state]
             mat = layers[index % len(layers)]
             if self.facing == "left":
                 mat = sprites.flip(mat)
@@ -74,4 +77,4 @@ class SpriteBank:
         return self._acc_cache[key]
 
     def frame_count(self, state: str) -> int:
-        return len(sprites.SPRITES[state])
+        return len(sprites.sprites_for(self.stage)[state])

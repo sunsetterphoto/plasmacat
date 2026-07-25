@@ -11,7 +11,6 @@ from __future__ import annotations
 import random
 
 from plasmacat.bridge.desktop import DesktopState
-from plasmacat.cat.cat import Cat
 from plasmacat.cat.toys import ToyManager
 
 DURATION_S = 60.0
@@ -28,10 +27,13 @@ class MouseHunt:
         self.active = True
         self._spawn_t = 0.0
 
-    def tick(self, dt: float, desktop: DesktopState, cat: Cat,
+    def tick(self, dt: float, desktop: DesktopState, cats,
              toys: ToyManager, sounds: list[str]) -> None:
+        """cats: a single Cat or a list of them (P47) — any cat can score."""
         if not self.active:
             return
+        if not isinstance(cats, list):
+            cats = [cats]
         self.time_left -= dt
         self._spawn_t -= dt
         mice = [t for t in toys.toys if t.kind == "mouse"]
@@ -43,14 +45,17 @@ class MouseHunt:
             x = self.rng.uniform(ax + 100, ax + aw - 100)
             toys.spawn("mouse", x, desktop.floor_y_at(x))
         for m in mice:
-            if abs(m.x - cat.body.x) < CATCH_DIST \
-                    and abs(m.y - cat.body.y) < CATCH_DIST:
-                toys.toys.remove(m)
-                self.score += 1
-                cat.brain.gain("play", 8)
-                cat.brain.add_xp(2.0, "caught a mouse")
-                sounds.append("mew")
-                cat.brain.log.append("caught a mouse!")
+            for cat in cats:
+                if abs(m.x - cat.body.x) < CATCH_DIST \
+                        and abs(m.y - cat.body.y) < CATCH_DIST:
+                    toys.toys.remove(m)
+                    self.score += 1
+                    cat.brain.gain("play", 8)
+                    cat.brain.add_xp(2.0, "caught a mouse")
+                    cat.brain._care(0.05)
+                    sounds.append("mew")
+                    cat.brain.log.append("caught a mouse!")
+                    break
         if self.time_left <= 0.0 or self.score >= MAX_CAUGHT:
             self.active = False
             # session over: the surviving mice scurry off

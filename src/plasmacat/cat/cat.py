@@ -6,14 +6,18 @@ import random
 
 from plasmacat.bridge.desktop import DesktopState
 from plasmacat.cat.animations import ANIMATIONS
-from plasmacat.cat.brain import Brain
+from plasmacat.cat.brain import Brain, Household
 from plasmacat.cat.physics import WALK_SPEED, CatBody
+from plasmacat.persist import Customization
 
 
 class Cat:
-    def __init__(self, x: float, y: float, rng: random.Random | None = None) -> None:
+    def __init__(self, x: float, y: float, rng: random.Random | None = None,
+                 cust: Customization | None = None,
+                 household: Household | None = None) -> None:
         self.body = CatBody(x, y)
-        self.brain = Brain(rng)
+        self.brain = Brain(rng, household)
+        self.cust = cust or Customization()  # P47: every cat has its own look
         self.anim_state = "stand"
         self.frame = 0
         self._frame_t = 0.0
@@ -22,6 +26,8 @@ class Cat:
         self._blink_left = 0.0
 
     def tick(self, dt: float, desktop: DesktopState) -> None:
+        # P47: kittens toddle, seniors shuffle — the brain's stage sets the pace
+        self.body.speed_mult = self.brain.speed_mult
         self.brain.tick(dt, self.body, desktop)
         self.body.tick(dt, desktop)
         self._update_anim(dt)

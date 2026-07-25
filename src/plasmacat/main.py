@@ -11,8 +11,10 @@ First run (no save file) opens the customization wizard. State is saved to
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -81,10 +83,10 @@ def main() -> int:
         app.setWindowIcon(QIcon(str(_icon_png)))
 
     from plasmacat.bridge.kwin import KWinBridge
-    from plasmacat.cat.brain import NEED_DECAY
+    from plasmacat.cat.brain import NEED_DECAY, offline_aging
     from plasmacat.cat.render import SpriteBank
     from plasmacat.overlay import Overlay
-    from plasmacat.persist import Customization, GameState
+    from plasmacat.persist import CatState, Customization, GameState
     from plasmacat.sound.packs import SoundPlayer
     from plasmacat.sound.synth import build_pack
     from plasmacat.ui.wizard import SetupWizard
@@ -122,13 +124,22 @@ def main() -> int:
                          muted=not cust.sound_on, volume=cust.volume)
 
     overlay = Overlay(bridge, player=player, cust=cust, debug="--debug" in sys.argv)
-    brain = overlay.cat.brain
+    brain = overlay.cat.brain  # primary brain; furniture state is shared (P47)
 
     if state is not None:  # restore progress (with offline decay)
-        restored = persist.offline_decay(state.needs, state.saved_at, NEED_DECAY)
-        brain.needs.update(restored)
-        brain.attachment_xp = state.attachment_xp
-        brain.petted_strokes = state.petted_strokes
+        elapsed = max(time.time() - state.saved_at, 0.0) if state.saved_at else 0.0
+        for i, cs in enumerate(state.cats):
+            cat = overlay.cat if i == 0 \
+                else overlay.add_cat(cs.customization, age=cs.age)
+            b = cat.brain
+            b.needs.update(persist.offline_decay(cs.needs, state.saved_at,
+                                                 NEED_DECAY))
+            b.attachment_xp = cs.attachment_xp
+            b.petted_strokes = cs.petted_strokes
+            if cs.fav_toy in ("ball", "plush"):
+                b.fav_toy = cs.fav_toy
+            # the clock ticked while the game was closed (neglect pace, P47)
+            b.age, b.care = offline_aging(cs.age, cs.care, elapsed)
         brain.food_type = state.food_type
         brain.food_fill = state.food_fill
         brain.water_fill = state.water_fill
@@ -149,8 +160,6 @@ def main() -> int:
         brain.shelves = [(float(s.get("x", 400)), float(s.get("y", 300)))
                          for s in state.shelves]
         brain.puke_spots = list(state.puke_spots)
-        if state.fav_toy in ("ball", "plush"):
-            brain.fav_toy = state.fav_toy
         overlay._sync_furniture_platforms()
         for t in state.toys:
             if t.get("kind") in ("ball", "plush"):
@@ -161,14 +170,20 @@ def main() -> int:
                 fy = overlay.desktop.floor_y_at(x)  # the toy's own screen (P38)
                 y = min(max(float(t.get("y", fy)), 0.0), fy)
                 overlay.toys.spawn(t["kind"], x, y)
+    else:
+        brain.age = 0.0  # a fresh game: you raise her from a kitten (P47)
 
     # -- saving ---------------------------------------------------------------
     def collect_state() -> GameState:
         return GameState(
-            customization=overlay.cust,
-            needs=dict(brain.needs),
-            attachment_xp=brain.attachment_xp,
-            petted_strokes=brain.petted_strokes,
+            cats=[CatState(customization=c.cust,
+                           needs=dict(c.brain.needs),
+                           attachment_xp=c.brain.attachment_xp,
+                           petted_strokes=c.brain.petted_strokes,
+                           age=c.brain.age,
+                           care=c.brain.care,
+                           fav_toy=c.brain.fav_toy)
+                  for c in overlay.cats],
             toys=[{"kind": t.kind, "x": t.x, "y": t.y}
                   for t in overlay.toys.toys if t.kind in ("ball", "plush")],
             food_type=brain.food_type,
@@ -188,7 +203,6 @@ def main() -> int:
             box_x=brain.box_x,
             shelves=[{"x": sx, "y": sy} for sx, sy in brain.shelves],
             puke_spots=list(brain.puke_spots),
-            fav_toy=brain.fav_toy,
         )
 
     def save_now() -> None:
@@ -202,7 +216,8 @@ def main() -> int:
     # -- tray -----------------------------------------------------------------
     def tray_icon(c: Customization) -> QIcon:
         bank = SpriteBank(palette=c.to_palette(), pattern=c.pattern, scale=1,
-                          accessory=c.collar is not None)
+                          accessory=c.collar is not None,
+                          stage=overlay.cat.brain.stage)
         return QIcon(bank.frame("sit", 0))
 
     tray = QSystemTrayIcon(tray_icon(cust), app)
@@ -226,7 +241,7 @@ def main() -> int:
     menu.addSeparator()
 
     treat_action = QAction("Give treat", menu)
-    treat_action.triggered.connect(brain.on_treat)
+    treat_action.triggered.connect(lambda: overlay.active.brain.on_treat())
     menu.addAction(treat_action)
 
     status_win_action = QAction("Status widget", menu)
@@ -287,14 +302,14 @@ def main() -> int:
         bowls_menu.addAction(a)
     bowls_menu.addSeparator()
     refill_food_action = QAction("Refill food", bowls_menu)
-    refill_food_action.triggered.connect(brain.refill_food)
+    refill_food_action.triggered.connect(lambda: overlay.active.brain.refill_food())
     bowls_menu.addAction(refill_food_action)
 
     from plasmacat.cat.brain import FOODS
     shop_menu = menu.addMenu("Food shop")
     for fid, food in FOODS.items():
         a = QAction(f"Buy {food['label']}", shop_menu)
-        a.triggered.connect(lambda checked, f=fid: brain.buy_food(f))
+        a.triggered.connect(lambda checked, f=fid: overlay.active.brain.buy_food(f))
         shop_menu.addAction(a)
 
     furniture_menu = menu.addMenu("Furniture")
@@ -311,10 +326,10 @@ def main() -> int:
         furniture_menu.addAction(a)
     furniture_menu.addSeparator()
     clean_litter_action = QAction("Clean litter box", furniture_menu)
-    clean_litter_action.triggered.connect(brain.clean_litter)
+    clean_litter_action.triggered.connect(lambda: overlay.active.brain.clean_litter())
     furniture_menu.addAction(clean_litter_action)
     puke_action = QAction("Clean up vomit", furniture_menu)
-    puke_action.triggered.connect(brain.clean_puke)
+    puke_action.triggered.connect(lambda: overlay.active.brain.clean_puke())
     furniture_menu.addAction(puke_action)
     remove_furniture_action = QAction("Remove furniture", furniture_menu)
 
@@ -374,17 +389,46 @@ def main() -> int:
         pack_menu.addAction(a)
     menu.addSeparator()
 
+    add_kitten_action = QAction("Add kitten…", menu)
+
+    KITTEN_NAMES = ("Findus", "Luna", "Balu", "Kiki", "Mogli", "Nala", "Felix")
+
+    def add_kitten() -> None:
+        from plasmacat.overlay import MAX_CATS
+        if len(overlay.cats) >= MAX_CATS:
+            overlay.notify and overlay.notify(
+                "PlasmaCat", f"The home is full — {MAX_CATS} cats are enough!")
+            return
+        used = {c.cust.name for c in overlay.cats}
+        name = next((n for n in KITTEN_NAMES if n not in used), "Kitty")
+        from plasmacat.ui.wizard import FUR_PRESETS, PATTERNS
+        proto = Customization(name=name,
+                              fur=random.choice(list(FUR_PRESETS.values())),
+                              pattern=random.choice(PATTERNS))
+        wiz = SetupWizard(proto)
+        wiz.setWindowTitle("PlasmaCat — A new kitten!")
+        if wiz.exec() == QDialog.DialogCode.Accepted:
+            overlay.add_kitten(wiz.result_customization())
+            save_now()
+
+    add_kitten_action.triggered.connect(add_kitten)
+    menu.addAction(add_kitten_action)
+
     customize_action = QAction("Customize…", menu)
 
     def open_wizard() -> None:
-        wiz = SetupWizard(overlay.cust)
+        wiz = SetupWizard(overlay.active.cust)  # edits the cat at the cursor
         if wiz.exec() == QDialog.DialogCode.Accepted:
             c = wiz.result_customization()
             c.status_window = overlay.cust.status_window  # keep the P39 toggle
             overlay.set_customization(c)
+            # sound is global: mirror it onto the primary cust (saved there)
+            overlay.cust.sound_on = c.sound_on
+            overlay.cust.volume = c.volume
+            overlay.cust.sound_pack = c.sound_pack
             player.set_muted(not c.sound_on)
             player.set_volume(c.volume)
-            tray.setIcon(tray_icon(c))
+            tray.setIcon(tray_icon(overlay.cust))
             save_now()
 
     customize_action.triggered.connect(open_wizard)
@@ -427,11 +471,15 @@ def main() -> int:
         title, msg, QSystemTrayIcon.MessageIcon.Information, 6000)
 
     def refresh_status() -> None:
-        status_action.setText(
-            f"{overlay.cust.name} — {brain.attachment_name} ({int(brain.attachment_xp)} XP)")
+        ab = overlay.active.brain  # the cat at the cursor (P47)
+        header = (f"{overlay.active.cust.name} — {ab.life_stage} — "
+                  f"{ab.attachment_name} ({int(ab.attachment_xp)} XP)")
+        if len(overlay.cats) > 1:
+            header += f"   ·   {len(overlay.cats)} cats"
+        status_action.setText(header)
         for need, action in need_actions.items():
             label = "Litter" if need == "bladder" else need.capitalize()
-            action.setText(f"{label:<10} {_bar(brain.needs[need])}")
+            action.setText(f"{label:<10} {_bar(ab.needs[need])}")
         fill_actions["food_fill"].setText(
             f"{FOODS[brain.food_type]['label']:<10} {_bar(brain.food_fill)}")
         fill_actions["water_fill"].setText("Fountain  ∞")
