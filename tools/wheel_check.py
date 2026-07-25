@@ -17,6 +17,10 @@ class FakeBridge(QObject):
     windowsChanged = Signal(list)
     workAreaChanged = Signal(dict)
     workAreasChanged = Signal(list)
+    keyEvent = Signal(str)
+
+    def set_control_mode(self, on: bool) -> None:
+        pass
 
 
 def main() -> None:
@@ -40,6 +44,17 @@ def main() -> None:
     from PySide6.QtCore import QEventLoop, QTimer
     loop = QEventLoop()
     QTimer.singleShot(int(secs * 1000), loop.quit)
+
+    def _probe() -> None:
+        print(f"[wheel] t={o._time:.1f} state={brain.state} "
+              f"left={brain.state_left:.1f} play={brain.needs['play']:.0f} "
+              f"energy={brain.needs['energy']:.0f} angle={o._wheel_angle:.0f} "
+              f"plat={body.platform.caption if body.platform else None} "
+              f"y={body.y:.0f}")
+
+    probe = QTimer(o)
+    probe.timeout.connect(_probe)
+    probe.start(1000)
     loop.exec()
     print("WHEEL_CHECK_DONE", "angle:", round(o._wheel_angle, 1),
                   "state:", brain.state, "anim:", o.cat.anim_state)

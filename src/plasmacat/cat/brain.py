@@ -1206,8 +1206,11 @@ class Brain:
                 self.sounds.append("chirp" if self.rng.random() < 0.5 else "boing")
                 self._fx_t = 1.5
             if self.state_left <= 0 or self.needs["energy"] < 15 or self.needs["play"] >= 98:
-                floor = next(p for p in desktop.platforms if p.floor)
-                if body.jump_to(body.x + 70, floor.y):
+                # hop out — far enough to clear the wheel's platform span,
+                # or she lands right back on the track (P46)
+                tx = body.x + body.facing * 110
+                plat = desktop.platform_below(tx, body.y)
+                if body.jump_to(tx, plat.y):
                     self.state = "air_down"
                     self.state_left = 4.0
                     self.add_xp(3.0, "exercise wheel")

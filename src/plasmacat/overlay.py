@@ -124,7 +124,10 @@ class FurnitureLayer(QWidget):
                     p.drawPixmap(wr.x(), wr.y(), o._props["wheel_stand"])
                     p.save()
                     p.translate(cxm, cym)
-                    p.rotate(-o._wheel_angle)
+                    # clockwise (positive in Qt's y-down space): the bottom
+                    # surface moves left, matching the right-facing runner
+                    # (was counterclockwise = visibly backwards, P46)
+                    p.rotate(o._wheel_angle)
                     p.translate(-cxm, -cym)
                     p.drawPixmap(wr.x(), wr.y(), o._props["wheel_rim"])
                     p.restore()
@@ -787,6 +790,12 @@ class Overlay(QWidget):
                 self._furn_update(old_back.united(new_back).adjusted(6, 6, 6, 6))
         self._prev_furn_moving = furn_moving
         self._prev_back = back
+        # the exercise wheel spins on THIS layer: repaint its rect every tick
+        # while she runs (P46) — the ring is symmetric, only the red marker
+        # shows the angle, and it lives OUTSIDE the cat's repaint region, so
+        # region updates never showed the rotation
+        if self.cat.brain.state == "wheel_run" and self.cat.brain.wheel_x is not None:
+            self._furn_update(self._wheel_rect())
         self._sync_window_geometry()
         if self.debug:
             self.update()  # platform lines may change anytime
@@ -895,7 +904,9 @@ class Overlay(QWidget):
         if self.cat.brain.wheel_x is not None:
             x = self.cat.brain.wheel_x
             fy = self.desktop.floor_y_at(x)
-            plats.append(Platform(x - 60, x + 60, fy - 42, "Laufrad"))
+            # the wheel's inner track: her feet touch the rim's inner bottom
+            # (canvas row 60 = fy-36 at scale 3; was fy-42, she floated — P46)
+            plats.append(Platform(x - 60, x + 60, fy - 36, "Laufrad"))
         if self.cat.brain.box_x is not None:
             x = self.cat.brain.box_x
             fy = self.desktop.floor_y_at(x)
