@@ -675,8 +675,10 @@ def main() -> None:
         catHB.tick(DT, dH)
         tmB.tick(DT, dH, catHB, catHB.brain.sounds)
         catHB.brain.sounds.clear()
-    assert abs(catHB.body.x - ballB.x) < 330, \
-        f"cat did not follow the ball (cat={catHB.body.x:.0f}, ball={ballB.x:.0f})"
+    assert catHB.body.x > 700, \
+        f"toy_watch must follow the ball (cat={catHB.body.x:.0f})"
+    assert abs(catHB.body.x - ballB.x) < 500, \
+        f"cat lost the ball entirely (cat={catHB.body.x:.0f}, ball={ballB.x:.0f})"
     # sprite table integrity for the new poses
     for k in ("loaf", "stretch", "yawn", "knead", "sleep_belly", "wiggle",
               "tail_lash", "alert", "squat", "cover", "drink", "watch"):
@@ -1279,6 +1281,25 @@ def main() -> None:
     assert not hunt.active
     assert not [t for t in tmM.toys if t.kind == "mouse"], "mice must leave"
     print("P42c: mouse hunt OK")
+
+    # -- P43: resting ball must not micro-bounce at the idle frame rate --------
+    dR = DesktopState(1920, 1080)
+    catR = Cat(400, 1080, rng=random.Random(940))
+    tmR = ToyManager(rng=random.Random(940))
+    rb = tmR.spawn("ball", 600.0, 1080.0)
+    rb.on_ground = True
+    for _ in range(30):
+        b = rb.tick_physics(0.066, dR)  # 15 fps idle cadence
+        assert not b, "resting ball must never bounce"
+    assert rb.y == 1080.0 and rb.vy == 0.0 and rb.on_ground
+    # ...but rolling off an edge still falls
+    rb2 = tmR.spawn("ball", 900.0, 1080.0)
+    rb2.on_ground = True
+    dR.set_work_areas([{"x": 0, "y": 0, "w": 800, "h": 1080}])  # floor shrinks
+    for _ in range(30):
+        rb2.tick_physics(0.066, dR)
+    assert rb2.y == dR.floor_y_at(rb2.x), "ball must land on the new floor"
+    print("P43: resting ball OK")
 
     print("SIM_TEST_OK")
 

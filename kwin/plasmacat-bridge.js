@@ -97,8 +97,11 @@ function sendWorkAreas() {
     if (outs[i] !== workspace.activeScreen) ordered.push(outs[i]);
   }
   // P43: a FLOATING panel (dock) intrudes into the clientArea — measured:
-  // area bottom 1021 vs panel top 1005. The world floor must sit on the
-  // panel's VISUAL top or the bottom ~16 px of the furniture hide behind it.
+  // area bottom 1021 vs panel top 1005. And its frameGeometry includes a
+  // float margin/shadow: the panel's VISUAL top is ~8 px lower (measured:
+  // visual top 1013, bottom gap 8 — the panel's 46 px strut is centered in
+  // its 62 px surface). The world floor must sit on the visual top, or the
+  // furniture hides behind the panel / floats above it.
   const docks = [];
   const stack = workspace.stackingOrder;
   for (let i = 0; i < stack.length; i++) {
@@ -108,13 +111,19 @@ function sendWorkAreas() {
   for (let i = 0; i < ordered.length; i++) {
     const a = workspace.clientArea(KWin.WorkArea, ordered[i],
                                    workspace.currentDesktop);
+    const fa = workspace.clientArea(KWin.FullScreenArea, ordered[i],
+                                    workspace.currentDesktop);
+    const reserved = (fa.y + fa.height) - (a.y + a.height);  // bottom strut
     let bottom = a.y + a.height;
     for (let d = 0; d < docks.length; d++) {
       const dg = docks[d];
       const hOverlap = dg.x < a.x + a.width && dg.x + dg.width > a.x;
-      // a bottom-edge dock whose top crosses the area bottom floats over it
-      if (hOverlap && dg.y < bottom && dg.y + dg.height >= bottom - 4) {
-        bottom = Math.min(bottom, dg.y);
+      // the panel's visual rect: its strut is centered in the surface
+      const margin = Math.max(0, (dg.height - reserved) / 2);
+      const visualTop = dg.y + margin;
+      // a bottom-edge dock whose visual top crosses the area bottom floats over it
+      if (hOverlap && visualTop < bottom && dg.y + dg.height >= bottom - 4) {
+        bottom = Math.min(bottom, visualTop);
       }
     }
     areas.push({x: Math.round(a.x), y: Math.round(a.y),

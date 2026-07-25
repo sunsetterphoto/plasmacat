@@ -16,7 +16,9 @@ from plasmacat.cat.physics import GRAVITY
 
 BOUNCE_DAMP = 0.6       # vertical energy kept per bounce
 BOUNCE_VX_KEEP = 0.85   # horizontal energy kept per bounce
-ROLL_FRICTION = 0.985
+ROLL_FRICTION = 0.965   # per-tick ground roll decay (~177 px per bat; P43:
+                        # the platform catch used to eat vx EVERY tick, which
+                        # made rolling balls stop almost instantly)
 BAT_RANGE = 60.0
 CATCH_RANGE = 55.0
 
@@ -49,8 +51,20 @@ class Toy:
     def tick_physics(self, dt: float, desktop: DesktopState) -> bool:
         """Gravity + platform bounce. Returns True if it bounced (for sound)."""
         bounced = False
+        if self.on_ground:
+            # resting: do NOT accumulate gravity — at the idle frame rate
+            # (15 fps) a single tick of gravity passes the settle threshold
+            # and the ball micro-bounces forever (P43 wobble). Still detect
+            # rolling off an edge / a vanishing floor.
+            self.vy = 0.0
+            supported = self.y >= desktop.floor_y_at(self.x) - 1.0 or any(
+                abs(p.y - self.y) < 2.0 and p.contains_x(self.x, 12.0)
+                for p in desktop.platforms)
+            if not supported:
+                self.on_ground = False
         old_y = self.y
-        self.vy += GRAVITY * dt
+        if not self.on_ground:
+            self.vy += GRAVITY * dt
         self.vy = min(self.vy, 4000.0)      # terminal velocity (safety, P25)
         self.x += self.vx * dt
         self.y += self.vy * dt
