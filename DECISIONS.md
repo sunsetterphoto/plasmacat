@@ -91,21 +91,29 @@ returning after a weekend isn't instant death. Autosave every 30 s + on quit.
 Reset deletes the save and re-execs (`os.execvpe`) so the next run hits the first-run wizard
 cleanly. The leftover KWin script is handled by the new instance's idempotent load (D9).
 
-## D20 — Multi-monitor world model (P38)
+## D20 — Multi-monitor world model (P38) + floating-panel floors (P43)
 The world is the virtual desktop; the KWin script sends one work area per
 output (`SetWorkAreas`, active screen first) via `clientArea(WorkArea, output,
-desktop)`. DesktopState holds `work_areas` (one floor platform each);
-`floor_y_at(x)` resolves any x to its screen's floor, `floor_x0/x1` are the
-union. Floor seams are walkable: same level crosses on foot, steps up to 60 px
-(STEP_UP_MAX) are snapped, taller steps and gaps between screens are walls
-(turn around); jumping across stays legal. Falling into a gap snaps to the
-nearest floor (`nearest_floor`, x clamped onto its span) — the cat's version
-of the P25 toy safety net. Floor edges have no -EDGE_MARGIN lip-drop (that is
-a window-top behavior); single-screen behavior is unchanged. Rendering: one
-fullscreen FurnitureLayer per screen (`QWindow.setScreen` + `showFullScreen`,
-each translating world→screen), the small front window (D19) roams all
-screens in virtual coords via KWin. Sim-covered (P38 block); live dual-screen
-test pending (single-screen machine at implementation time).
+desktop)`. **P43: a FLOATING panel intrudes into that area** (measured: area
+bottom 1021, panel visual top 1005) and covers the keepBelow furniture. The
+bridge therefore shrinks each area past every bottom-edge dock's visual top
+(`frameGeometry` of `w.dock` windows overlapping the area bottom by >4 px) —
+the world floor follows the floating panel up/down as it (un)docks, no
+config change. Side effect: (un)docking fires work-area updates often, so
+the app no longer re-anchors placed bowls to the corner (only off-world
+bowls are recovered). DesktopState holds `work_areas` (one floor platform
+each); `floor_y_at(x)` resolves any x to its screen's floor, `floor_x0/x1`
+are the union. Floor seams are walkable: same level crosses on foot, steps
+up to 60 px (STEP_UP_MAX) are snapped, taller steps and gaps between screens
+are walls (turn around); jumping across stays legal. Falling into a gap
+snaps to the nearest floor (`nearest_floor`, x clamped onto its span) — the
+cat's version of the P25 toy safety net. Floor edges have no -EDGE_MARGIN
+lip-drop (that is a window-top behavior); single-screen behavior is
+unchanged. Rendering: one fullscreen FurnitureLayer per screen
+(`QWindow.setScreen` + `showFullScreen`, each translating world→screen), the
+small front window (D19) roams all screens in virtual coords via KWin.
+Sim-covered (P38 block); live dual-screen test pending (single-screen
+machine at implementation time).
 
 ## D18 — Occlusion model for windows (P16)
 - Platforms = window top edges CLIPPED by foreground windows (KWin stacking

@@ -1,9 +1,11 @@
 """Desktop world state: cursor, work areas, and the platforms the cat can stand on.
 
 Platforms are the per-screen work-area floors (screens minus panels, reported
-by the KWin bridge via clientArea(WorkArea) per output — P38) plus the top
-edges of visible normal windows. Bogus micro-windows (DECISIONS.md D11) are
-filtered by size. With a single screen there is exactly one work area.
+by the KWin bridge via clientArea(WorkArea) per output — P38; additionally
+shrunk past the VISUAL top of floating panels, which intrude into the
+clientArea — P43) plus the top edges of visible normal windows. Bogus
+micro-windows (DECISIONS.md D11) are filtered by size. With a single screen
+there is exactly one work area.
 """
 
 from __future__ import annotations

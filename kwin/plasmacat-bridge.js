@@ -96,12 +96,29 @@ function sendWorkAreas() {
   for (let i = 0; i < outs.length; i++) {
     if (outs[i] !== workspace.activeScreen) ordered.push(outs[i]);
   }
+  // P43: a FLOATING panel (dock) intrudes into the clientArea — measured:
+  // area bottom 1021 vs panel top 1005. The world floor must sit on the
+  // panel's VISUAL top or the bottom ~16 px of the furniture hide behind it.
+  const docks = [];
+  const stack = workspace.stackingOrder;
+  for (let i = 0; i < stack.length; i++) {
+    if (stack[i].dock) docks.push(stack[i].frameGeometry);
+  }
   const areas = [];
   for (let i = 0; i < ordered.length; i++) {
     const a = workspace.clientArea(KWin.WorkArea, ordered[i],
                                    workspace.currentDesktop);
+    let bottom = a.y + a.height;
+    for (let d = 0; d < docks.length; d++) {
+      const dg = docks[d];
+      const hOverlap = dg.x < a.x + a.width && dg.x + dg.width > a.x;
+      // a bottom-edge dock whose top crosses the area bottom floats over it
+      if (hOverlap && dg.y < bottom && dg.y + dg.height >= bottom - 4) {
+        bottom = Math.min(bottom, dg.y);
+      }
+    }
     areas.push({x: Math.round(a.x), y: Math.round(a.y),
-                w: Math.round(a.width), h: Math.round(a.height)});
+                w: Math.round(a.width), h: Math.round(bottom - a.y)});
   }
   call("SetWorkAreas", JSON.stringify(areas));
 }

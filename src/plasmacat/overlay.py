@@ -277,11 +277,19 @@ class Overlay(QWidget):
         self.desktop.set_work_areas(areas)
         if self.debug:
             print(f"[dbg] work areas -> {areas}")
-        # keep the bowls anchored to the work-area corner
-        self.cat.brain.food_x = self.desktop.floor_x0 + 110.0
-        self.cat.brain.water_x = self.desktop.floor_x0 + 200.0
-        # floor_y may have moved (panel resized/Plasma restart): the furniture
-        # platforms must follow or the cat floats beside the bed/wheel (P24)
+        # keep the bowls inside the area — but do NOT yank user-placed bowls
+        # back to the corner: a floating panel docking/undocking (P43) fires
+        # this often, and only the floor height changes then
+        for attr, default_off in (("food_x", 110.0), ("water_x", 200.0)):
+            x = getattr(self.cat.brain, attr)
+            inside = x is not None \
+                and self.desktop.floor_x0 + 80 <= x <= self.desktop.floor_x1 - 80
+            if not inside:
+                setattr(self.cat.brain, attr,
+                        self.desktop.floor_x0 + default_off)
+        # floor_y may have moved (panel resized/floats/Plasma restart): the
+        # furniture platforms must follow or the cat floats beside the
+        # bed/wheel (P24)
         self._sync_furniture_platforms()
         # a placed status board must not end up under a grown panel (P42)
         if self.cust.status_pos is not None:

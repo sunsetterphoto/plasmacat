@@ -113,6 +113,14 @@ def main() -> None:
     assert not o.cust.status_window
     assert o._status_rect().isNull() and o._status_sig() == ()
 
+    # 8. P43: work-area changes keep placed bowls, recover off-world ones
+    o.cat.brain.food_x = 500.0
+    o._on_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1000}])
+    assert o.cat.brain.food_x == 500.0, "placed bowl must not jump to the corner"
+    o.cat.brain.food_x = 50000.0  # off-world (e.g. monitor unplugged)
+    o._on_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1000}])
+    assert o.cat.brain.food_x < 1920, "off-world bowl must be re-anchored"
+
     print("WINDOW_GEO_OK")
 
 
