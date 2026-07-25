@@ -40,9 +40,14 @@ attached to you over time.
 - **Sound**: retro synth pack and a natural pack with real cat recordings —
   meows, purring, eating and drinking (see
   `assets/sounds/natural/ATTRIBUTION.md`), mute + volume in the tray.
-- **Status window**: an optional always-on-top panel with all need bars and
-  care buttons (treat, refill food, clean litter) — toggle it from the tray,
-  it remembers its state.
+- **Status board**: an optional pinned panel painted on the desktop level
+  (behind your windows, never in the way, can't get lost) with all need
+  bars — toggle and position it from the tray, it remembers its place.
+- **Control mode + mini-games**: take the wheel yourself — toggle "Control
+  cat" in the tray and steer her with WASD or the arrow keys (jump: Up/W/
+  Space, halt: Down/S). First mini-game built on it: **mouse hunt** (60
+  seconds, up to 8 scurrying mice — corner them and catch them by touch;
+  she also hunts them on her own).
 
 ## Requirements
 
@@ -63,8 +68,8 @@ The first run opens the customization wizard. State is saved every 30 s to
 `~/.local/share/catgame/save.json` (needs decay while you're away).
 
 Everything is driven from the **system tray icon**: needs status, give treat,
-toys, bowls, food shop, furniture, sound, status window, start at login,
-customize, reset, quit.
+toys, bowls, food shop, furniture, sound, status board, control mode, games,
+start at login, customize, reset, quit.
 
 Optional app launcher for your menu (edit the `Exec=` path first):
 ```bash

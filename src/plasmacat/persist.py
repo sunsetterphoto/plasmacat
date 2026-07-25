@@ -27,7 +27,9 @@ class Customization:
     sound_on: bool = True
     volume: float = 0.7
     sound_pack: str = "retro"                       # retro|natural
-    status_window: bool = False                     # P39: small status panel
+    status_window: bool = False                     # P42: pinned status board
+    status_pos: list | None = None                  # [x, y] world coords (None
+                                                    # = default: bottom-left)
 
     def derive_shade(self) -> tuple[int, int, int]:
         if self.fur_shade is not None:
@@ -67,6 +69,9 @@ class Customization:
             volume=d.get("volume", 0.7),
             sound_pack=d.get("sound_pack", "retro"),
             status_window=d.get("status_window", False),
+            status_pos=(lambda v: [float(v[0]), float(v[1])]
+                        if isinstance(v, (list, tuple)) and len(v) == 2
+                        else None)(d.get("status_pos")),
         )
 
 

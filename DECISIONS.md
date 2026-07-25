@@ -136,11 +136,51 @@ in the overlay's window title (`plasmacat@x,y,w,h`); the bridge script
 connects `captionChanged` and applies it (plain `plasmacat` title = leave
 alone, used while placement mode goes fullscreen temporarily). No polling, no
 extra DBus surface. Window policy: cover the world bounding box of all
-front-layer content (cat, bubble, cat door, ALL toys — a resting ball far
-from the cat must stay visible) + 24 px margin, min 240x180, clamped to the
+front-layer content (cat, bubble, cat door, the FRONT toys — floor toys
+moved to the back layer in P42/D22) + 24 px margin, min 240x180, clamped to the
 virtual screen geometry; recenter when content escapes (moves are cheap),
 shrink only after 5 s below 60% fill (resizes reallocate the buffer).
 Rendering translates world→window by the requested origin (KWin applies the
 position, so we trust our own request). Verified: window follows a walking
 cat across the whole screen, no trails, ~0.0%/core.
 
+
+## D21 — Keyboard control via control-mode script reload (P42)
+Wayland gives the click-through overlays no keyboard focus (PROGRESS known
+issues), and KWin global shortcuts GRAB their keys system-wide — even when
+the callback does nothing. So the helper script is rendered from the template
+with a second placeholder (`__CONTROL_MODE__`): only while the tray toggle
+"Control cat (WASD/arrows)" is on does the runtime script call
+`registerShortcut` for Left/Right/Up/Down/Space/W/A/S/D, pushing
+`KeyEvent("left"|"right"|"jump"|"stop")` over DBus. Toggling re-renders +
+reloads the script (unload/load/start, same machinery as the watchdog);
+unloadScript releases the grabs (stale kglobalaccel NAME entries can linger
+until its cleanUp — verified harmless: keys are not grabbed anymore).
+KWin shortcuts fire on press only (no key-up): a direction counts as held
+for KEY_HOLD_S=0.35 s in the brain (auto-repeat refreshes it), jump/stop are
+edge events. While controlled, the brain suspends autonomy (`state="user"`,
+FRONT_COMMITTED, dwell overridden like _force_level_ready) but needs, purring
+and sounds keep running; hunt/startle/greet reflexes never seize a
+user-driven cat. `./run.sh --control` starts with the mode on (dev/test).
+A crash with the mode on leaves the old script grabbing keys — same leftover
+case as P34: `./run.sh --unload-bridge` (or just starting the app again,
+whose leftover-handling replaces the script) fixes it.
+
+## D22 — Status board on the furniture layer + toy layer rule (P42)
+The P39 status WINDOW (a real Qt.Tool window) could be minimized/lost and
+floated over everything; the replacement is a display-only panel PAINTED on
+the FurnitureLayer (`Overlay._paint_status`, 250x176, world coords): behind
+windows, click-through, un-losable, one per screen world slice. Position is
+`Customization.status_pos` (persisted; None = bottom-left default), set via
+placement mode ("Position status widget…"); repaint is signature-gated to
+its own rect (`_status_sig`). Care actions stay in the tray (click-through
+means no buttons). ui/statuswin.py is deleted.
+Toy layer rule: cursor tools (string, laser) and carried toys render on the
+front overlay; resting floor toys (ball, plush, mouse) render on the
+FurnitureLayer like the furniture they lie on (`Overlay._toy_front`). Their
+motion drives region repaints + the P32 every-3rd-tick full flush on the
+back layer (`back_toy_sig`). Removing toys outside the tick (Clear toys,
+string/laser off) must repaint explicitly — the next tick's old∪new region
+otherwise never covers the toy's last position (ghost pixels in the
+translucent buffer). Clear toys also resets toy-targeting brain states
+(`brain.clear_toy_state`) and unchecks the string/laser tray actions.

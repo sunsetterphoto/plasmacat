@@ -6,6 +6,7 @@ The KWin script (kwin/plasmacat-bridge.js) pushes data to us via callDBus:
   SetWorkAreas("[...]")  -> workAreasChanged(list[dict]) (one work area per screen, P38)
   SetWorkArea("{...}")   -> workAreaChanged(dict)       (legacy single-area form)
   OverlayTagged("...")   -> overlayTagged(str)          (our overlay got keepAbove etc.)
+  KeyEvent("left")       -> keyEvent(str)               (P42 control-mode shortcuts)
 All DBus arguments are single strings (DECISIONS.md D3).
 
 IMPORTANT (DECISIONS.md D10): the DBus interface name QtDBus auto-generates for a
@@ -27,6 +28,7 @@ SCRIPT_PLUGIN = "plasmacat-bridge"
 SERVICE = "org.plasmacat.Bridge"
 OBJPATH = "/Bridge"
 IFACE_PLACEHOLDER = "__CATGAME_IFACE__"
+CONTROL_PLACEHOLDER = "__CONTROL_MODE__"  # P42: control-mode key shortcuts
 
 
 class BridgeService(QObject):
@@ -38,6 +40,7 @@ class BridgeService(QObject):
     workAreaChanged = Signal(dict)
     workAreasChanged = Signal(list)
     overlayTagged = Signal(str)
+    keyEvent = Signal(str)  # P42: control-mode key from a KWin shortcut
 
     @Slot(str)
     def SetCursor(self, csv: str) -> None:
@@ -80,6 +83,10 @@ class BridgeService(QObject):
     def OverlayTagged(self, caption: str) -> None:
         self.overlayTagged.emit(caption)
 
+    @Slot(str)
+    def KeyEvent(self, payload: str) -> None:
+        self.keyEvent.emit(payload)
+
 
 class KWinBridge(QObject):
     """Owns the DBus service and the lifecycle of the KWin helper script."""
@@ -93,10 +100,12 @@ class KWinBridge(QObject):
         self.workAreaChanged = self.service.workAreaChanged
         self.workAreasChanged = self.service.workAreasChanged
         self.overlayTagged = self.service.overlayTagged
+        self.keyEvent = self.service.keyEvent  # P42
         self._scripting = QDBusInterface(
             "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"
         )
         self._loaded = False
+        self._control_mode = False  # P42: script rendered WITH key shortcuts?
 
     def start(self) -> bool:
         """Register the DBus service and load the KWin script.
@@ -122,6 +131,15 @@ class KWinBridge(QObject):
         script = self._render_script(bus)
         if script is None:
             return False
+        self._loaded = self._load_script(script)
+        return self._loaded
+
+    def _load_script(self, script: str) -> bool:
+        """loadScript + start() with retries (slow KWin right after login,
+        P36). loadScript only registers the script; start() actually runs it
+        (D9)."""
+        from PySide6.QtCore import QThread
+
         reply = None
         args: list = []
         for _attempt in range(3):
@@ -135,13 +153,32 @@ class KWinBridge(QObject):
                 break
             # KWin may still be initializing (autostart right after login, P36)
             QThread.msleep(500)
-        self._loaded = bool(args) and int(args[0]) >= 0
-        if self._loaded:
-            # loadScript only registers the script; start() actually runs it.
+        ok = bool(args) and int(args[0]) >= 0
+        if ok:
             self._scripting.call("start")
-        if not self._loaded:
-            print("[bridge] ERROR: KWin refused to load the script:", reply.errorMessage())
-        return self._loaded
+        else:
+            print("[bridge] ERROR: KWin refused to load the script:",
+                  reply.errorMessage())
+        return ok
+
+    def _reload(self) -> None:
+        """Unload + re-render + load the helper script (keeps the DBus
+        service registration — only the compositor side is replaced)."""
+        script = self._render_script(QDBusConnection.sessionBus())
+        if script is None:
+            return
+        self._scripting.call("unloadScript", SCRIPT_PLUGIN)
+        self._loaded = self._load_script(script)
+
+    def set_control_mode(self, on: bool) -> None:
+        """P42: re-render the helper script WITH/WITHOUT the global key
+        shortcuts and reload it. The shortcuts grab WASD/arrows system-wide,
+        so they must only exist while the user steers the cat."""
+        if on == self._control_mode:
+            return
+        self._control_mode = on
+        if self._loaded:
+            self._reload()
 
     def _render_script(self, bus: QDBusConnection) -> str | None:
         """Fill __CATGAME_IFACE__ in the JS template with the interface name
@@ -178,9 +215,14 @@ class KWinBridge(QObject):
         if IFACE_PLACEHOLDER not in src:
             print("[bridge] ERROR: template has no iface placeholder")
             return None
+        if CONTROL_PLACEHOLDER not in src:
+            print("[bridge] ERROR: template has no control-mode placeholder")
+            return None
         runtime = template.replace(".js", ".runtime.js")
         with open(runtime, "w", encoding="utf-8") as fh:
-            fh.write(src.replace(IFACE_PLACEHOLDER, iface))
+            fh.write(src.replace(IFACE_PLACEHOLDER, iface)
+                     .replace(CONTROL_PLACEHOLDER,
+                              "true" if self._control_mode else "false"))
         print(f"[bridge] DBus interface: {iface}")
         return runtime
 
@@ -203,8 +245,7 @@ class KWinBridge(QObject):
         loaded = bool(reply.arguments() and reply.arguments()[0])
         if not loaded:
             print("[bridge] KWin restarted or script lost — reloading")
-            self._loaded = False
-            self.start()
+            self._reload()  # keeps service registration + control mode
 
 
 def unload_bridge() -> None:

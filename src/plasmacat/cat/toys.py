@@ -1,4 +1,5 @@
-"""Toys: ball, plush mouse, string, laser pointer. Physics + cat glue.
+"""Toys: ball, plush mouse, string, laser pointer, live mouse (P42).
+Physics + cat glue.
 
 Toys live on the overlay's floor/platforms like the cat. The ball can be
 batted by the cat (proximity + facing). The plush mouse and the string's lure
@@ -123,7 +124,7 @@ class String(Toy):
         self.vy *= 0.94
         self.x += self.vx * dt
         self.y += self.vy * dt
-        self.y = min(self.y, desktop.screen_h - 6)
+        self.y = min(self.y, desktop.floor_y_at(self.x) - 6)  # per-screen (P38)
         return False
 
 
@@ -164,6 +165,47 @@ class Laser(Toy):
         return False
 
 
+class Mouse(Toy):
+    """Live mouse for the mouse-hunt mini-game (P42): scurries along the
+    floor, flees the cat at < 250 px, turns at the world's walls. Grounded
+    on its screen's floor. Session-only (never persisted)."""
+
+    kind = "mouse"
+    FLEE_RANGE = 250.0
+    FLEE_SPEED = 220.0
+    WANDER_SPEED = 140.0
+
+    def __init__(self, x: float, y: float) -> None:
+        super().__init__(x, y)
+        self._turn_t = 0.0
+
+    def tick_physics(self, dt: float, desktop: DesktopState, cat=None,
+                     rng=None) -> bool:
+        rng = rng or random
+        self._turn_t -= dt
+        fleeing = False
+        if cat is not None and abs(cat.body.x - self.x) < self.FLEE_RANGE \
+                and abs(cat.body.y - self.y) < 60:
+            direction = 1 if self.x >= cat.body.x else -1
+            if (direction > 0 and self.x >= desktop.floor_x1 - 40) \
+                    or (direction < 0 and self.x <= desktop.floor_x0 + 40):
+                self.vx = 0.0  # cornered against the wall: catchable!
+            else:
+                self.vx = direction * self.FLEE_SPEED
+            self._turn_t = 0.3  # commit to the sprint, no dithering
+            fleeing = True
+        if not fleeing and self._turn_t <= 0:
+            self._turn_t = rng.uniform(0.6, 2.0)
+            self.vx = rng.choice((-1.0, 0.0, 1.0)) * self.WANDER_SPEED
+        if self.x <= desktop.floor_x0 + 20 and self.vx < 0:
+            self.vx = -self.vx  # walls turn her around
+        elif self.x >= desktop.floor_x1 - 20 and self.vx > 0:
+            self.vx = -self.vx
+        self.x += self.vx * dt
+        self.y = desktop.floor_y_at(self.x)  # grounded on her screen (P38)
+        return False
+
+
 class ToyManager:
     def __init__(self, rng: random.Random | None = None) -> None:
         self.toys: list[Toy] = []
@@ -171,7 +213,8 @@ class ToyManager:
         self._time = 0.0
 
     def spawn(self, kind: str, x: float, y: float) -> Toy:
-        cls = {"ball": Ball, "plush": Plush, "string": String, "laser": Laser}[kind]
+        cls = {"ball": Ball, "plush": Plush, "string": String, "laser": Laser,
+               "mouse": Mouse}[kind]
         # only one string / one laser dot at a time
         if kind in ("string", "laser"):
             self.toys = [t for t in self.toys if t.kind != kind]
@@ -201,7 +244,11 @@ class ToyManager:
                 continue
             if toy.kind == "string":
                 toy.anchor = desktop.cursor
-            if toy.tick_physics(dt, desktop):
+            if isinstance(toy, Mouse):
+                bounced = toy.tick_physics(dt, desktop, cat, self.rng)
+            else:
+                bounced = toy.tick_physics(dt, desktop)
+            if bounced:
                 sounds.append("boing")
             # cat bats the ball when close and facing it
             if toy.kind == "ball" and self._time - toy.last_bat > 0.8:

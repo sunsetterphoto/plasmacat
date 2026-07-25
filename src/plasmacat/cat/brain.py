@@ -37,6 +37,8 @@ FURNITURE_CAPTIONS = ("Katzenbaum", "Kratzbaum", "Katzennest", "Regal",
 LEVEL_BACK_CAPTIONS = FURNITURE_CAPTIONS + ("Laufrad",)
 NEGLECT_EAT_S = 4500.0          # ~75 min without attention -> boredom eating
 LEVEL_DWELL_S = 30.0            # after a level change she STAYS (user P28)
+KEY_HOLD_S = 0.35               # P42: a direction key counts as 'held' this
+                                # long (auto-repeat refreshes; no key-up events)
 
 # states that COMMIT her to a level (P28). Everything else (sit, groom,
 # loaf, watch, yawn, rituals, enjoy…) is level-neutral and never flips her:
@@ -52,7 +54,7 @@ BACK_COMMITTED = frozenset({
 FRONT_COMMITTED = frozenset({
     "wander", "chase", "hunt_stalk", "hunt_pounce", "to_toy", "pounce_toy",
     "follow", "to_gift", "carry_gift", "greet", "hop_walk", "zoomies",
-    "laser_chase", "laser_pounce",
+    "laser_chase", "laser_pounce", "user",
 })
 
 SLEEP_REGEN = 100 / 900.0       # energy refills in 15 min of sleep
@@ -174,6 +176,10 @@ class Brain:
         self._level_t = LEVEL_DWELL_S    # allow the first commit immediately
         # P34: laser pointer sessions
         self._laser_cd = 0.0             # cooldown after a chase session
+        # P42: user control mode (WASD/arrows via KWin global shortcuts)
+        self.user_control = False
+        self.held: dict[str, float] = {}  # direction -> seconds still held
+        self._user_jump = False           # jump edge queued by a key event
 
     def _is_sleep_state(self) -> bool:
         return self.state in ("sleep", "sleep_belly")
@@ -318,6 +324,66 @@ class Brain:
             body.stop()
             self.gain("play", 1.0)
 
+    def clear_toy_state(self) -> None:
+        """'Clear toys' (tray): drop every behavior that targets a toy, so she
+        doesn't pounce at air or 'catch' a deleted toy (P42)."""
+        self._play_toy_target = None
+        self._gift_toy = None
+        if self._wiggle_then is not None and self._wiggle_then[0] in ("toy", "laser"):
+            self._wiggle_then = None  # the wiggle branch lands on idle by itself
+        if self.state in ("to_toy", "pounce_toy", "toy_watch", "to_gift",
+                          "carry_gift", "laser_chase", "laser_pounce"):
+            self.state = "idle"
+            self.state_left = 0.0
+
+    def set_user_control(self, on: bool) -> None:
+        """Tray toggle (P42): the human drives the cat with WASD/arrows.
+        The brain's autonomy is suspended while this is on."""
+        self.user_control = on
+        self.held.clear()
+        self._user_jump = False
+        self._force_level_ready()   # the human plays: she may come forward
+        if not on:
+            self.state = "idle"
+            self.state_left = 0.0
+
+    def on_key_event(self, name: str) -> None:
+        """A global-shortcut activation from the KWin bridge. There are no
+        key-up events on Wayland: a direction counts as held for KEY_HOLD_S
+        (key auto-repeat keeps refreshing it), jump/stop are edge events."""
+        if not self.user_control:
+            return
+        if name in ("left", "right"):
+            self.held[name] = KEY_HOLD_S
+        elif name == "jump":
+            self._user_jump = True
+        elif name == "stop":
+            self.held.clear()
+
+    def _user_tick(self, dt: float, body: CatBody, desktop: DesktopState) -> None:
+        """Held keys -> run, jump edge -> forward hop. Needs/ambient keep
+        running; _choose stays out of the way via the rolling state."""
+        for k in list(self.held):
+            self.held[k] -= dt
+            if self.held[k] <= 0:
+                del self.held[k]
+        self.state = "user"
+        self.state_left = 0.5
+        direction = (1 if "right" in self.held else 0) \
+            - (1 if "left" in self.held else 0)
+        if direction != 0:
+            body.facing = direction  # also aims the jump (pressed mid-run)
+        if body.airborne:
+            return
+        if self._user_jump:
+            self._user_jump = False
+            body.jump_to(body.x + body.facing * 140, body.y - 80)
+            return
+        if direction != 0:
+            body.walk_to(body.x + direction * 400, RUN_SPEED)
+        elif body.target_x is not None:
+            body.stop()
+
     def on_hunt_trigger(self, body: CatBody, cursor: tuple[float, float],
                         desktop: DesktopState) -> None:
         """Fast erratic cursor movement nearby: reflex pounce sequence."""
@@ -331,7 +397,7 @@ class Brain:
                           "scratching", "nibbling", "knead", "yawn", "stretch",
                           "wiggle", "retch", "to_box", "to_box_air", "box_hide",
                           "to_gift", "carry_gift", "prep_jump", "land",
-                          "laser_chase", "laser_pounce"):
+                          "laser_chase", "laser_pounce", "user"):
             return
         if self.needs["play"] < 15:
             return
@@ -352,7 +418,7 @@ class Brain:
                           "littering", "litter_cover", "wheel_run",
                           "air_up", "air_down", "supervise", "scratching",
                           "nibbling", "knead", "retch", "carry_gift",
-                          "prep_jump"):
+                          "prep_jump", "user"):
             return
         self._startle_cd = 10.0
         cx, _cy = desktop.cursor
@@ -376,7 +442,7 @@ class Brain:
         if self.state in ("sleep", "sleep_belly", "eating", "drinking",
                           "littering", "litter_cover", "wheel_run",
                           "air_up", "air_down", "nibbling", "scratching",
-                          "knead"):
+                          "knead", "user"):
             return
         cx, _cy = desktop.cursor
         offset = 55 * (-1 if cx < body.x else 1)
@@ -552,12 +618,20 @@ class Brain:
         self._level_t += dt
         want = self._committed_level(body)
         if want is not None and want != self._level:
-            if self._level_t >= LEVEL_DWELL_S:
+            # user control is a user-initiated event: like _force_level_ready,
+            # it overrides the dwell immediately (P42)
+            if self._level_t >= LEVEL_DWELL_S or self.user_control:
                 self._level = want
                 self._level_t = 0.0
                 self.log.append(f"level -> {want}")
             else:
                 self._redirect_to_level(body, desktop)
+        if self.user_control:
+            # the human steers (P42): autonomy sleeps, needs/ambient run on
+            self._user_tick(dt, body, desktop)
+            self._ambient(dt)
+            self._was_sleeping = self._is_sleep_state()
+            return
         self._continue(dt, body, desktop)
         self._ambient(dt)
         if body.airborne or body.target_x is not None:
@@ -1286,7 +1360,10 @@ class Brain:
                 self.state = "idle"
         elif self.state == "to_toy":
             toy = self._play_toy_target
-            if toy is None:
+            if toy is None or (self.toys is not None
+                               and toy not in self.toys.toys):
+                # gone mid-approach ('Clear toys'): drop it, don't pounce air
+                self._play_toy_target = None
                 self.state = "idle"
                 self.state_left = 0.0
             elif body.target_x is None:
@@ -1340,6 +1417,7 @@ class Brain:
                 toy = self._play_toy_target
                 self._play_toy_target = None
                 caught = (toy is not None
+                          and (self.toys is None or toy in self.toys.toys)
                           and ((toy.x - body.x) ** 2 + (toy.y - body.y) ** 2) ** 0.5 < 70)
                 if caught:
                     self.gain("play", 14)
@@ -1347,8 +1425,9 @@ class Brain:
                     self.sounds.append("boing")
                     self.log.append(f"caught the {toy.kind}!")
                     if toy.kind == "plush" and self.rng.random() < 0.4:
-                        toy.x = min(max(body.x + self.rng.uniform(-400, 400), 30.0),
-                                    desktop.screen_w - 30)
+                        toy.x = min(max(body.x + self.rng.uniform(-400, 400),
+                                        desktop.floor_x0 + 30),
+                                    desktop.floor_x1 - 30)
                         toy.vy = -250  # 'escapes' with a hop
                         self.log.append("the plush mouse 'escaped'!")
                     elif toy.kind == "string":

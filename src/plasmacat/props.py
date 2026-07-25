@@ -255,6 +255,18 @@ PLUSH_MOUSE = [
     "..........",
 ]
 
+# P42 mouse-hunt mini-game: a LIVE mouse (facing left, tail trailing right)
+MOUSE = [
+    "..............",
+    "..oo..........",
+    ".oggo.........",
+    "oggggoooooo...",
+    "oggggggggggoo.",
+    ".ogggggggggg.o",
+    "..oo..oo....o.",
+    ".............o",
+]
+
 LURE = [
     "......",
     ".yy...",
@@ -418,6 +430,7 @@ PROPS: dict[str, list[str]] = {
     "heart": ICON_HEART,
     "ball": BALL,
     "plush": PLUSH_MOUSE,
+    "mouse": MOUSE,
     "lure": LURE,
     "laser_dot": LASER_DOT,
     "scratch_post": _scratch_post(),

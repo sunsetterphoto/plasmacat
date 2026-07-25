@@ -1122,6 +1122,164 @@ def main() -> None:
     assert back.customization.status_window is True
     print("P39/P40: litter deposits + persistence OK")
 
+    # -- P42: toy consistency fixes ---------------------------------------------
+    # 1. 'Clear toys' mid-approach: to_toy must drop the stale target instead
+    #    of pouncing at air (and pounce_toy must not 'catch' a deleted toy)
+    dC = DesktopState(1920, 1080)
+    catC = Cat(400, 1080, rng=random.Random(910))
+    tmC = ToyManager(rng=random.Random(910))
+    catC.brain.toys = tmC
+    toyC = tmC.spawn("plush", 700.0, 1080.0)
+    catC.brain._play_toy_target = toyC
+    catC.brain.state = "to_toy"
+    catC.brain.state_left = 10.0
+    tmC.toys.clear()  # the tray's 'Clear toys'
+    catC.tick(DT, dC)
+    # the stale target is dropped (she may immediately pick a new behavior —
+    # the point is: no pounce at a deleted toy)
+    assert catC.brain._play_toy_target is None
+    assert catC.brain.state not in ("to_toy", "pounce_toy"), catC.brain.state
+    # mid-air pounce on a removed toy: no catch, no XP
+    catC.brain._play_toy_target = toyC
+    catC.brain.state = "pounce_toy"
+    catC.brain.state_left = 4.0
+    xp0 = catC.brain.attachment_xp
+    catC.tick(DT, dC)
+    assert catC.brain.state != "enjoy", "caught a toy that no longer exists"
+    assert catC.brain.attachment_xp == xp0
+    # clear_toy_state resets every toy-targeting behavior
+    catC.brain.state = "laser_chase"
+    catC.brain.state_left = 30.0
+    catC.brain._wiggle_then = ("toy", 500.0, 1080.0)
+    catC.brain._gift_toy = toyC
+    catC.brain.clear_toy_state()
+    assert catC.brain.state == "idle" and catC.brain.state_left == 0.0
+    assert catC.brain._wiggle_then is None and catC.brain._gift_toy is None
+    # a hunt wiggle survives (it never targeted a toy)
+    catC.brain.state = "wiggle"
+    catC.brain.state_left = 0.5
+    catC.brain._wiggle_then = ("hunt", 500.0, 1080.0)
+    catC.brain.clear_toy_state()
+    assert catC.brain.state == "wiggle" and catC.brain._wiggle_then is not None
+    # 2. string lure clamps to ITS screen's floor, not the primary's (P38)
+    dC.set_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1000},
+                       {"x": 1920, "y": 0, "w": 1920, "h": 800}])
+    st = tmC.spawn("string", 2500.0, 500.0)
+    st.anchor = (2500.0, 300.0)
+    for _ in range(int(3 / DT)):
+        st.tick_physics(DT, dC)
+    assert st.y <= dC.floor_y_at(2500.0) - 6 + 1e-9, (st.y, dC.floor_y_at(2500.0))
+    # 3. the plush 'escape' teleport respects the combined work-area span
+    catC2 = Cat(400, 1000, rng=random.Random(911))
+    tmC2 = ToyManager(rng=random.Random(911))
+    catC2.brain.toys = tmC2
+    toyC2 = tmC2.spawn("plush", 405.0, 1000.0)  # right next to her: caught
+    catC2.brain._play_toy_target = toyC2
+    catC2.brain.state = "pounce_toy"
+    catC2.brain.state_left = 4.0
+    catC2.brain.rng = random.Random(1)  # random() < 0.4 -> the 'escape' fires
+    catC2.tick(DT, dC)
+    assert dC.floor_x0 + 30 <= toyC2.x <= dC.floor_x1 - 30, toyC2.x
+    # 4. status board position persists (P42)
+    st2 = GameState(customization=Customization(status_window=True,
+                                                status_pos=[100.0, 200.0]))
+    with tempfile.TemporaryDirectory() as td:
+        save(Path(td) / "s2.json", st2)
+        back2 = load(Path(td) / "s2.json")
+    assert back2 is not None
+    assert back2.customization.status_pos == [100.0, 200.0]
+    print("P42: toy fixes (stale target, clear toys, clamps) OK")
+
+    # -- P42b: user control mode (WASD/arrows) ---------------------------------
+    dU = DesktopState(1920, 1080)
+    catU = Cat(400, 1080, rng=random.Random(920))
+    catU.brain._level = "back"  # she starts on the desktop level
+    catU.brain.set_user_control(True)
+    # key events without control mode are ignored (guard check)
+    catU.brain.set_user_control(False)
+    catU.brain.on_key_event("right")
+    assert not catU.brain.held
+    catU.brain.set_user_control(True)
+    catU.brain.on_key_event("right")
+    assert catU.brain.held.get("right", 0.0) > 0
+    x0 = catU.body.x
+    for _ in range(int(1.0 / DT)):
+        catU.brain.on_key_event("right")  # auto-repeat keeps the key 'held'
+        catU.tick(DT, dU)
+    assert catU.brain.state == "user", catU.brain.state
+    assert catU.body.x > x0 + 50, (x0, catU.body.x)
+    assert catU.brain.level == "front", "user control must pull her forward"
+    # key held only via auto-repeat refresh: after ~0.4 s silence she stops
+    for _ in range(int(0.6 / DT)):
+        catU.tick(DT, dU)
+    assert not catU.brain.held and catU.body.target_x is None
+    # left works too; opposite keys cancel out
+    catU.brain.on_key_event("left")
+    catU.tick(DT, dU)
+    assert catU.body.facing == -1
+    catU.brain.on_key_event("right")
+    for _ in range(int(0.2 / DT)):
+        catU.tick(DT, dU)
+    assert catU.body.target_x is None, "left+right = stand still"
+    # jump is an edge event; stop clears held keys
+    catU.brain.on_key_event("jump")
+    catU.tick(DT, dU)
+    assert catU.body.airborne, "jump key must start a hop"
+    catU.brain.on_key_event("right")
+    catU.brain.on_key_event("stop")
+    assert not catU.brain.held
+    # reflexes never seize a user-driven cat
+    while catU.body.airborne:
+        catU.tick(DT, dU)
+    catU.brain.on_hunt_trigger(catU.body, (900, 900), dU)
+    assert catU.brain.state == "user", catU.brain.state
+    catU.brain.on_startle(catU.body, dU)
+    assert catU.brain.state == "user", catU.brain.state
+    # switching the mode off hands her back to the brain
+    catU.brain.set_user_control(False)
+    assert catU.brain.state == "idle" and catU.brain.state_left == 0.0
+    print("P42b: user control mode OK")
+
+    # -- P42c: mouse hunt mini-game ---------------------------------------------
+    from plasmacat.cat.minigames import MAX_CAUGHT, MouseHunt
+    from plasmacat.props import prop_to_pixels
+
+    w, h, _px = prop_to_pixels("mouse")  # sprite is valid + registered
+    assert w == 14 and h == 8, (w, h)
+    dM = DesktopState(1920, 1080)
+    catM = Cat(600, 1080, rng=random.Random(930))
+    tmM = ToyManager(rng=random.Random(930))
+    catM.brain.toys = tmM
+    # a mouse flees the cat (cat left of it -> it sprints right)
+    m = tmM.spawn("mouse", 700.0, 1080.0)
+    for _ in range(int(0.3 / DT)):  # within the flee sprint: no wander yet
+        tmM.tick(DT, dM, catM, catM.brain.sounds)
+    assert m.vx > 0 and m.x > 720.0, (m.vx, m.x)
+    assert m.y == dM.floor_y_at(m.x)
+    # and she gets CORNERED at the world's wall (flee can't beat the wall)
+    m.x = dM.floor_x1 - 25.0
+    catM.body.x = dM.floor_x1 - 200.0
+    for _ in range(int(1.0 / DT)):
+        tmM.tick(DT, dM, catM, catM.brain.sounds)
+    assert m.x < dM.floor_x1 - 20, m.x  # never pushed through the wall
+    assert m.vx == 0.0, ("cornered mouse must be catchable", m.vx)
+    # session: spawns mice, a touch catches one (score + XP), ends on limit
+    hunt = MouseHunt(rng=random.Random(931))
+    hunt._spawn_t = 0.0
+    hunt.tick(DT, dM, catM, tmM, catM.brain.sounds)
+    assert any(t.kind == "mouse" for t in tmM.toys), "no mouse spawned"
+    prey = next(t for t in tmM.toys if t.kind == "mouse")
+    prey.x, prey.y = catM.body.x + 10, catM.body.y  # practically in her paws
+    xp0 = catM.brain.attachment_xp
+    hunt.tick(DT, dM, catM, tmM, catM.brain.sounds)
+    assert hunt.score == 1 and catM.brain.attachment_xp > xp0
+    assert prey not in tmM.toys
+    hunt.score = MAX_CAUGHT  # simulate a finished hunt
+    hunt.tick(DT, dM, catM, tmM, catM.brain.sounds)
+    assert not hunt.active
+    assert not [t for t in tmM.toys if t.kind == "mouse"], "mice must leave"
+    print("P42c: mouse hunt OK")
+
     print("SIM_TEST_OK")
 
 

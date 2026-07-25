@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QWidget
 from plasmacat.bridge.desktop import DesktopState
 from plasmacat.cat.cat import Cat
 from plasmacat.cat.interactions import InteractionDetector
+from plasmacat.cat.minigames import MouseHunt
 from plasmacat.cat.render import SpriteBank, prop_pixmap
 from plasmacat.cat.toys import ToyManager
 from plasmacat.persist import Customization
@@ -38,6 +39,10 @@ WIN_MIN_H = 180
 WIN_MARGIN = 24         # breathing room around the content bbox
 WIN_SHRINK_DELAY = 5.0  # seconds of small content before the window shrinks
 WIN_SHRINK_FRAC = 0.6   # … to below this fraction of the window size
+
+# P42 pinned status board (painted on the FurnitureLayer, display-only)
+STATUS_W = 250
+STATUS_H = 32 + 8 * 17 + 8  # title + 8 bar rows + bottom margin
 
 
 class FurnitureLayer(QWidget):
@@ -95,6 +100,19 @@ class FurnitureLayer(QWidget):
                 if region.intersects(dr):
                     pm = o._props["litter_poop" if kind == "poop" else "litter_pee"]
                     p.drawPixmap(dr.x(), dr.y(), pm)
+            # 1d. floor toys (ball/plush/…): desktop level like the furniture
+            # they rest on. Only cursor tools + carried toys stay front (P42).
+            for toy in o.toys.toys:
+                if o._toy_front(toy):
+                    continue
+                if not (math.isfinite(toy.x) and math.isfinite(toy.y)) \
+                        or abs(toy.x) > 10000 or abs(toy.y) > 10000:
+                    continue
+                pm = o._props[toy.kind]
+                tr = QRect(int(toy.x) - pm.width() // 2,
+                           int(toy.y) - pm.height(), pm.width(), pm.height())
+                if region.intersects(tr):
+                    p.drawPixmap(tr.x(), tr.y(), pm)
             # 2. exercise wheel: static stand, then rim rotating around the axle —
             #    the full illusion lives on THIS layer (P23)
             if o.cat.brain.wheel_x is not None:
@@ -126,6 +144,10 @@ class FurnitureLayer(QWidget):
                 br2 = o._box_rect()
                 if region.intersects(br2):
                     p.drawPixmap(br2.x(), br2.y(), o._props["box_front"])
+            # 6. the pinned status board (P42): display-only panel
+            sr = o._status_rect()
+            if not sr.isNull() and region.intersects(sr):
+                o._paint_status(p)
         except Exception as exc:
             print(f"[paint] furniture layer error: {exc!r}")
         finally:
@@ -177,8 +199,8 @@ class Overlay(QWidget):
                          "puke", "wall_shelf", "box", "box_front",
                          "cat_door_0", "cat_door_1", "cat_door_2",
                          "fish", "drop", "zzz", "heart",
-                         "ball", "plush", "lure", "laser_dot", "scratch_post",
-                         "cat_bed",
+                         "ball", "plush", "mouse", "lure", "laser_dot",
+                         "scratch_post", "cat_bed",
                          "cat_grass", "litter_0", "litter_1", "litter_2",
                          "litter_poop", "litter_pee",
                          "cat_tree", "wheel_stand", "wheel_rim", "wheel_front")
@@ -195,14 +217,19 @@ class Overlay(QWidget):
         self._prev_back = False
         self._prev_brain_state = ""
         self._prev_puke_count = 0
+        self._last_back_toy_sig: tuple = ()  # P42: floor toys on the back layer
+        self._furn_move_ticks = 0            # P32 flush cadence, back layer
+        self._prev_furn_moving = False
         self._door: tuple[float, float, float, str] | None = None  # P27
         self._move_ticks = 0               # P32 full-flush cadence
         self._prev_moving = False
         self._win_x = 0                    # P37: window's world position
         self._win_y = 0                    # (applied by KWin, not by us)
         self._shrink_since: float | None = None
-        self._status_win = None            # P39: optional status panel
+        self._last_status_sig: tuple = ()  # P42: pinned status board
+        self._hunt: MouseHunt | None = None  # P42: mouse-hunt session
         self.notify = None  # optional callback(title, msg) set by the tray
+        self._bridge = bridge
         self.furniture_layers = [FurnitureLayer(self, s)
                                  for s in QGuiApplication.screens()]
         QGuiApplication.instance().screenAdded.connect(self._screens_changed)
@@ -212,6 +239,7 @@ class Overlay(QWidget):
         bridge.windowsChanged.connect(self.desktop.set_windows)
         bridge.workAreaChanged.connect(self._on_work_area)
         bridge.workAreasChanged.connect(self._on_work_areas)
+        bridge.keyEvent.connect(self._on_key_event)  # P42 control mode
 
         # NOTE: the detector owns the single CursorTracker — feed it, not a copy.
         self._detector = InteractionDetector()
@@ -254,6 +282,15 @@ class Overlay(QWidget):
         # floor_y may have moved (panel resized/Plasma restart): the furniture
         # platforms must follow or the cat floats beside the bed/wheel (P24)
         self._sync_furniture_platforms()
+        # a placed status board must not end up under a grown panel (P42)
+        if self.cust.status_pos is not None:
+            sx = min(max(self.cust.status_pos[0], self.desktop.floor_x0),
+                     self.desktop.floor_x1 - STATUS_W)
+            sy = min(max(self.cust.status_pos[1], 0.0),
+                     self.desktop.floor_y - STATUS_H)
+            if [sx, sy] != self.cust.status_pos:
+                self.cust.status_pos = [sx, sy]
+                self._furn_update(self._status_rect())
 
     def _screens_changed(self, _screen) -> None:
         """A monitor was (un)plugged: rebuild the furniture layers so each
@@ -430,9 +467,20 @@ class Overlay(QWidget):
         return QRect(int(self._door[0]) - pm.width() // 2,
                      int(self._door[1]) - pm.height(), pm.width(), pm.height())
 
-    def _toy_rects(self) -> list[QRect]:
+    @staticmethod
+    def _toy_front(toy) -> bool:
+        """Layer rule (P42): cursor tools (string, laser) and carried toys
+        are front-overlay content; resting floor toys (ball, plush, …) live
+        on the desktop (back) level together with the furniture they lie on."""
+        return toy.kind in ("string", "laser") or getattr(toy, "carried", False)
+
+    def _toy_rects(self, layer: str | None = None) -> list[QRect]:
         rects = []
         for toy in self.toys.toys:
+            if layer == "front" and not self._toy_front(toy):
+                continue
+            if layer == "back" and self._toy_front(toy):
+                continue
             # a runaway/out-of-world toy must never kill the tick (P25)
             if not (math.isfinite(toy.x) and math.isfinite(toy.y)):
                 continue
@@ -468,11 +516,11 @@ class Overlay(QWidget):
 
     def _front_bounds(self) -> QRect:
         """World-coords bounding rect of everything the front layer draws:
-        cat, bubble, cat door and ALL front toys (a resting ball far from
-        the cat must stay visible), plus margin and a minimum size."""
+        cat, bubble, cat door and the front toys (string/laser/carried —
+        floor toys live on the back layer since P42), margin, minimum size."""
         r = QRect(self._cat_rect())
         r = r.united(self._bubble_rect()).united(self._door_rect())
-        for tr in self._toy_rects():
+        for tr in self._toy_rects("front"):  # only front-layer content (P42)
             r = r.united(tr)
         r = r.adjusted(-WIN_MARGIN, -WIN_MARGIN, WIN_MARGIN, WIN_MARGIN)
         if r.width() < WIN_MIN_W:
@@ -542,8 +590,14 @@ class Overlay(QWidget):
         self._time += dt
         old = self._cat_rect().united(self._bubble_rect()).united(self._ghost_rect())
         old = old.united(self._door_rect())
-        for r in self._toy_rects():
-            old = old.united(r)
+        # layer-specific regions (P42): a far-away floor toy must not stretch
+        # the front window's dirty region into a giant bounding box
+        old_front = QRect(old)
+        for r in self._toy_rects("front"):
+            old_front = old_front.united(r)
+        old_back = QRect(old)
+        for r in self._toy_rects("back"):
+            old_back = old_back.united(r)
 
         if self._placing and self._time - self._place_since > 30.0:
             self._end_placement()  # auto-cancel dangling placement
@@ -581,6 +635,16 @@ class Overlay(QWidget):
 
         self.cat.tick(dt, self.desktop)
         self.toys.tick(dt, self.desktop, self.cat, self.cat.brain.sounds)
+        if self._hunt is not None:  # P42 mini-game session
+            self._hunt.tick(dt, self.desktop, self.cat, self.toys,
+                            self.cat.brain.sounds)
+            if not self._hunt.active:
+                if self.notify is not None:
+                    self.notify("Mouse hunt",
+                                f"Time! Your cat caught {self._hunt.score} "
+                                f"{'mouse' if self._hunt.score == 1 else 'mice'}.")
+                self._hunt = None
+                self._furn_update_all()  # the leftover mice scurry off
 
         # adaptive frame rate: 30 fps while anything moves, 15 fps when the
         # cat idles (P12c — the fullscreen Wayland surface copy is the cost
@@ -630,6 +694,11 @@ class Overlay(QWidget):
             if fframe != self._last_fountain_frame:
                 self._last_fountain_frame = fframe
                 self._furn_update(self._fountain_rect())
+        # the pinned status board (P42) repaints only its own region
+        status_sig = self._status_sig()
+        if status_sig != self._last_status_sig:
+            self._last_status_sig = status_sig
+            self._furn_update(self._status_rect())
         # user notifications (P25): full litter box / vomit on the floor
         if self.notify is not None:
             st = self.cat.brain.state
@@ -642,8 +711,12 @@ class Overlay(QWidget):
         self._prev_puke_count = len(self.cat.brain.puke_spots)
         new = self._cat_rect().united(self._bubble_rect()).united(self._ghost_rect())
         new = new.united(self._door_rect())
-        for r in self._toy_rects():
-            new = new.united(r)
+        new_front = QRect(new)
+        for r in self._toy_rects("front"):
+            new_front = new_front.united(r)
+        new_back = QRect(new)
+        for r in self._toy_rects("back"):
+            new_back = new_back.united(r)
         moving = self.cat.body.airborne or self.cat.body.target_x is not None
         if sig != self._last_sig:
             self._last_sig = sig
@@ -660,7 +733,7 @@ class Overlay(QWidget):
                 self.update()
             else:
                 ox, oy = self._origin()
-                self.update(old.united(new).adjusted(6, 6, 6, 6)
+                self.update(old_front.united(new_front).adjusted(6, 6, 6, 6)
                             .translated(-ox, -oy))
             self._prev_moving = moving
         # the cat moves between layers: keep the back layer in sync, and let
@@ -671,11 +744,24 @@ class Overlay(QWidget):
                           "in" if back else "out")
         if self._door is not None and self._time - self._door[2] >= DOOR_DUR:
             self._door = None
-        if back or back != self._prev_back or self._door is not None:
-            if moving and self._move_ticks % 3 == 0:
+        # floor toys on the back layer (P42): their motion repaints there too
+        back_toy_sig = tuple((t.kind, round(t.x), round(t.y))
+                             for t in self.toys.toys if not self._toy_front(t))
+        back_toys_changed = back_toy_sig != self._last_back_toy_sig
+        self._last_back_toy_sig = back_toy_sig
+        back_toy_moving = any(not self._toy_front(t)
+                              and (abs(t.vx) > 1 or abs(t.vy) > 1)
+                              for t in self.toys.toys)
+        furn_moving = (moving and back) or back_toy_moving
+        self._furn_move_ticks = self._furn_move_ticks + 1 if furn_moving else 0
+        if back or back != self._prev_back or self._door is not None \
+                or back_toys_changed:
+            if (furn_moving and self._furn_move_ticks % 3 == 0) \
+                    or (not furn_moving and self._prev_furn_moving):
                 self._furn_update_all()  # P32 full flush on the back layer
             else:
-                self._furn_update(old.united(new).adjusted(6, 6, 6, 6))
+                self._furn_update(old_back.united(new_back).adjusted(6, 6, 6, 6))
+        self._prev_furn_moving = furn_moving
         self._prev_back = back
         self._sync_window_geometry()
         if self.debug:
@@ -685,8 +771,8 @@ class Overlay(QWidget):
 
     def begin_placement(self, kind: str) -> None:
         """kind: 'ball' | 'plush' | 'food_bowl' | 'water_fountain' |
-        'wall_shelf' | 'box' | furniture kinds. The prop sticks to the
-        cursor; left-click drops it, right-click cancels."""
+        'wall_shelf' | 'box' | 'status' | furniture kinds. The prop sticks to
+        the cursor; left-click drops it, right-click cancels."""
         self._placing = kind
         self._place_since = self._time
         # plain title: no '@geometry' — the KWin script leaves a fullscreen
@@ -717,6 +803,15 @@ class Overlay(QWidget):
             toy = self.toys.spawn(kind, pos.x(), pos.y() - 15)
             if kind == "ball":
                 toy.vy = -150.0  # little pop on drop
+        elif kind == "status":
+            # pinned status board (P42): free position, clamped on-screen
+            gr = self._ghost_rect()
+            gx = min(max(gr.x(), self.desktop.floor_x0),
+                     self.desktop.floor_x1 - STATUS_W)
+            gy = min(max(float(gr.y()), 0.0),
+                     self.desktop.floor_y_at(gr.center().x()) - STATUS_H)
+            self.cust.status_pos = [gx, gy]
+            self._furn_update_all()
         else:
             x = min(max(pos.x(), self.desktop.floor_x0 + 90), self.desktop.floor_x1 - 90)
             if kind == "food_bowl":
@@ -790,25 +885,118 @@ class Overlay(QWidget):
     def _ghost_rect(self) -> QRect:
         if not self._placing:
             return QRect()
+        cx, cy = self.desktop.cursor
+        if self._placing == "status":  # the pinned status board (P42)
+            return QRect(cx - STATUS_W // 2, cy - STATUS_H // 2,
+                         STATUS_W, STATUS_H)
         key = {"water_fountain": "fountain_0"}.get(self._placing, self._placing)
         pm = self._props[key]
-        cx, cy = self.desktop.cursor
         return QRect(cx - pm.width() // 2, cy - pm.height() // 2,
                      pm.width(), pm.height())
 
-    # -- toys (called from the tray menu) --------------------------------------
+    # -- pinned status board (P42) ----------------------------------------------
+
+    def _status_rect(self) -> QRect:
+        """World-coords rect of the pinned status board — null when disabled.
+        Without a placed position it defaults to bottom-left over the panel."""
+        if not self.cust.status_window:
+            return QRect()
+        pos = self.cust.status_pos
+        if pos is None:
+            return QRect(int(self.desktop.floor_x0 + 40),
+                         int(self.desktop.floor_y - STATUS_H - 40),
+                         STATUS_W, STATUS_H)
+        return QRect(int(pos[0]), int(pos[1]), STATUS_W, STATUS_H)
+
+    def _status_sig(self) -> tuple:
+        """Everything the status board shows (rounded) — repaint on change."""
+        if not self.cust.status_window:
+            return ()
+        b = self.cat.brain
+        r = self._status_rect()
+        return (tuple(round(v) for v in b.needs.values()), round(b.food_fill),
+                round(b.litter_fill), len(b.litter_deposits),
+                round(b.attachment_xp), b.attachment_level, self.cust.name,
+                r.x(), r.y())
+
+    def _paint_status(self, p: QPainter) -> None:
+        """Draw the board (world coords; the painter is already translated).
+        Pure QPainter, display-only: the FurnitureLayer is click-through, so
+        the care actions (treat/refill/clean) stay in the tray menu."""
+        brain = self.cat.brain
+        sr = self._status_rect()
+        x, y = sr.x(), sr.y()
+        p.setPen(QPen(QColor(80, 80, 96, 220), 1))
+        p.setBrush(QColor(20, 20, 26, 205))
+        p.drawRoundedRect(sr, 8.0, 8.0)
+        font = p.font()
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(240, 240, 240))
+        p.drawText(x + 12, y + 20,
+                   f"{self.cust.name} — {brain.attachment_name} "
+                   f"({int(brain.attachment_xp)} XP)")
+        font.setBold(False)
+        p.setFont(font)
+        rows = [(label, brain.needs[key]) for key, label in
+                (("hunger", "Food"), ("thirst", "Water"), ("energy", "Energy"),
+                 ("play", "Play"), ("affection", "Affection"),
+                 ("bladder", "Litter"))]
+        rows.append(("Food bowl", brain.food_fill))
+        rows.append((f"Litter box ({len(brain.litter_deposits)})",
+                     brain.litter_fill / 5 * 100))
+        ry = y + 32
+        for label, value in rows:
+            p.setPen(QColor(200, 200, 210))
+            p.drawText(x + 12, ry + 9, label)
+            bx = x + 112
+            bw = STATUS_W - 112 - 12
+            v = min(max(value, 0.0), 100.0)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(60, 60, 72, 220))
+            p.drawRoundedRect(bx, ry, bw, 10, 4.0, 4.0)
+            if v > 0:
+                p.setBrush(QColor(90, 200, 90) if v > 50
+                           else QColor(230, 180, 60) if v > 25
+                           else QColor(220, 80, 70))
+                p.drawRoundedRect(bx, ry, max(4, int(bw * v / 100)), 10, 4.0, 4.0)
+            ry += 17
 
     def set_status_window(self, on: bool) -> None:
-        """Tray toggle (P39): the small always-on-top status panel."""
-        if on and self._status_win is None:
-            from plasmacat.ui.statuswin import StatusWindow
-            self._status_win = StatusWindow(self)
-        if self._status_win is not None:
-            self._status_win.setVisible(on)
+        """Tray toggle: the pinned status board on the desktop level (P42) —
+        painted on the FurnitureLayer behind windows, click-through. (Was a
+        real tool window in P39; it could be minimized and get lost.)"""
         self.cust.status_window = on
+        self._last_status_sig = ()     # force a repaint of the new state
+        self._furn_update_all()
         act = getattr(self, "_status_action", None)
         if act is not None and act.isChecked() != on:
-            act.setChecked(on)  # user closed the window via its X button
+            act.setChecked(on)
+
+    # -- user control mode (P42) -------------------------------------------------
+
+    def _on_key_event(self, name: str) -> None:
+        self.cat.brain.on_key_event(name)
+
+    def set_user_control(self, on: bool) -> None:
+        """Tray toggle: WASD/arrows drive the cat. The bridge registers the
+        global shortcuts only while the mode is on (they grab keys
+        system-wide — no shortcuts, no steering)."""
+        self.cat.brain.set_user_control(on)
+        self._bridge.set_control_mode(on)
+
+    # -- mini-games (P42) ---------------------------------------------------------
+
+    def start_mouse_hunt(self) -> None:
+        """Tray 'Games → Mouse hunt': 60 s of mice, catch up to 8."""
+        from plasmacat.cat.minigames import MouseHunt
+        if self._hunt is not None:
+            return  # a hunt is already running
+        self._hunt = MouseHunt(rng=random.Random())
+        if self.notify is not None:
+            self.notify("Mouse hunt", "Mice are loose! Catch 8 in 60 seconds.")
+
+    # -- toys (called from the tray menu) --------------------------------------
 
     def toggle_string(self, on: bool) -> None:
         if on:
@@ -816,6 +1004,8 @@ class Overlay(QWidget):
             self.toys.spawn("string", float(cx), float(cy + 150))
         else:
             self.toys.remove("string")
+            self.update()  # removal happens outside the tick: repaint now,
+                           # or the last frame lingers in the buffer (P42)
 
     def toggle_laser(self, on: bool) -> None:
         """Tray toggle: the laser-pointer dot at the cursor (P34)."""
@@ -828,9 +1018,22 @@ class Overlay(QWidget):
             if self.cat.brain.state in ("laser_chase", "laser_pounce"):
                 self.cat.brain.state = "idle"
                 self.cat.brain.state_left = 0.0
+            self.update()  # see toggle_string
 
     def clear_toys(self) -> None:
+        """Tray 'Clear toys': drop every toy on BOTH layers and repaint —
+        removals outside the tick never covered the toy's last drawn region
+        and left ghost pixels in the translucent buffers (P42). Also drops
+        toy-targeting brain states and syncs the tray checkmarks."""
         self.toys.toys.clear()
+        self.cat.brain.clear_toy_state()
+        self._hunt = None  # an active mouse hunt ends with its mice (P42)
+        for act in (getattr(self, "_string_action", None),
+                    getattr(self, "_laser_action", None)):
+            if act is not None and act.isChecked():
+                act.setChecked(False)  # keep the tray toggles in sync
+        self.update()
+        self._furn_update_all()
 
     def _signature(self) -> tuple:
         """Everything that can change what's on screen. Repaint only on change."""
@@ -839,7 +1042,13 @@ class Overlay(QWidget):
         return (
             self._anim_key(), c.frame, int(c.body.x), int(c.body.y), c.body.facing,
             c.brain.bubble, c.blink_active, self._placing, self.cat_layer(),
-            tuple((t.kind, round(t.x), round(t.y)) for t in self.toys.toys),
+            # only FRONT toys: floor toys on the back layer have their own
+            # back_toy_sig and must not repaint this window (P42). Carried
+            # flips + laser blink (visible) change the pixels without
+            # moving, so they are part of the signature too.
+            tuple((t.kind, round(t.x), round(t.y), bool(getattr(t, "carried", False)),
+                   getattr(t, "visible", True))
+                  for t in self.toys.toys if self._toy_front(t)),
             round(self._wheel_angle), c.brain.wheel_x,
             # the bubble's bob phase: missing this caused stale-bubble streaks
             int(2.5 * math.sin(self._time * 3.0)) if c.brain.bubble else 0,
@@ -851,6 +1060,8 @@ class Overlay(QWidget):
         b = self.cat.body
         if b.airborne or b.target_x is not None or self._placing or self.cat.blink_active:
             return True
+        if self.cat.brain.user_control:
+            return True  # P42: steering must stay at 30 fps
         if self._door is not None:
             return True  # the flap must animate smoothly (P27)
         if self.cat.anim_state in ("walk", "run", "jump", "scratch", "wiggle",
@@ -904,9 +1115,11 @@ class Overlay(QWidget):
                 if acc is not None:
                     p.drawPixmap(cr.x(), cr.y(), acc)
             # (wheel front arc is drawn on the FurnitureLayer with the wheel)
-            # toys (ball/plush are drawn bottom-aligned: contact point = sprite
-            # bottom, like the cat's feet; the string lure stays center-aligned)
+            # toys — only the front layer's share (string/laser/carried, P42);
+            # resting floor toys are drawn by the FurnitureLayer behind windows
             for toy in self.toys.toys:
+                if not self._toy_front(toy):
+                    continue
                 if not (math.isfinite(toy.x) and math.isfinite(toy.y)) \
                         or abs(toy.x) > 10000 or abs(toy.y) > 10000:
                     continue  # out-of-world toy: never crash the paint (P25)
@@ -943,8 +1156,12 @@ class Overlay(QWidget):
             if self._placing:
                 gr = self._ghost_rect()
                 p.setOpacity(0.65)
-                key = {"water_fountain": "fountain_0"}.get(self._placing, self._placing)
-                p.drawPixmap(gr.x(), gr.y(), self._props[key])
+                if self._placing == "status":  # no pixmap: panel outline
+                    p.fillRect(gr, QColor(20, 20, 26, 205))
+                else:
+                    key = {"water_fountain": "fountain_0"}.get(self._placing,
+                                                               self._placing)
+                    p.drawPixmap(gr.x(), gr.y(), self._props[key])
                 p.setOpacity(1.0)
                 hint = "Left-click to place — right-click to cancel"
                 fm = p.fontMetrics()

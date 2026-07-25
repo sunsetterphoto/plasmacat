@@ -226,7 +226,7 @@ def main() -> int:
     treat_action.triggered.connect(brain.on_treat)
     menu.addAction(treat_action)
 
-    status_win_action = QAction("Status window", menu)
+    status_win_action = QAction("Status widget", menu)
     status_win_action.setCheckable(True)
     status_win_action.setChecked(cust.status_window)
     status_win_action.toggled.connect(overlay.set_status_window)
@@ -234,6 +234,22 @@ def main() -> int:
     overlay._status_action = status_win_action
     if cust.status_window:
         overlay.set_status_window(True)
+    status_pos_action = QAction("Position status widget…", menu)
+
+    def place_status() -> None:
+        if not overlay.cust.status_window:
+            overlay.set_status_window(True)  # placing implies pinning it
+        overlay.begin_placement("status")
+
+    status_pos_action.triggered.connect(place_status)
+    menu.addAction(status_pos_action)
+
+    control_action = QAction("Control cat (WASD/arrows)", menu)
+    control_action.setCheckable(True)
+    control_action.toggled.connect(overlay.set_user_control)
+    menu.addAction(control_action)
+    if "--control" in sys.argv:  # dev shortcut: start in control mode
+        control_action.setChecked(True)
 
     toys_menu = menu.addMenu("Toys")
     for label, kind in (("Place ball…", "ball"),
@@ -245,13 +261,20 @@ def main() -> int:
     string_action.setCheckable(True)
     string_action.toggled.connect(overlay.toggle_string)
     toys_menu.addAction(string_action)
+    overlay._string_action = string_action  # synced by 'Clear toys' (P42)
     laser_action = QAction("Laser pointer", toys_menu)
     laser_action.setCheckable(True)
     laser_action.toggled.connect(overlay.toggle_laser)
     toys_menu.addAction(laser_action)
+    overlay._laser_action = laser_action
     clear_action = QAction("Clear toys", toys_menu)
     clear_action.triggered.connect(overlay.clear_toys)
     toys_menu.addAction(clear_action)
+
+    games_menu = menu.addMenu("Games")
+    hunt_action = QAction("Mouse hunt (60 s)", games_menu)
+    hunt_action.triggered.connect(lambda: overlay.start_mouse_hunt())
+    games_menu.addAction(hunt_action)
 
     bowls_menu = menu.addMenu("Bowls")
     for label, kind in (("Place food bowl…", "food_bowl"),

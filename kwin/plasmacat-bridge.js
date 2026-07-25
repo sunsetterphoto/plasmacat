@@ -17,6 +17,13 @@ const IFACE = "__CATGAME_IFACE__";
 const CURSOR_INTERVAL_MS = 33; // ~30 Hz
 var lastCursorSent = 0;
 
+// P42 control mode: the app re-renders this script with CONTROL=true while
+// the user steers the cat, then reloads it. WASD/arrows become GLOBAL
+// shortcuts (they grab the keys system-wide — that's why they only exist
+// while the mode is on). Wayland gives overlays no keyboard focus and KWin
+// shortcuts fire no key-up, so directions are dead-man's-switch events.
+const CONTROL = __CONTROL_MODE__;
+
 function call(method, payload) {
   callDBus(SERVICE, OBJPATH, IFACE, method, payload);
 }
@@ -138,3 +145,20 @@ workspace.cursorPosChanged.connect(onCursor);
 
 sendWindows();
 sendWorkAreas();
+
+// P42: register the control keys only in control mode (see CONTROL above)
+function reg(name, key, payload) {
+  registerShortcut("plasmacat-" + name, "PlasmaCat control: " + name, key,
+                   function () { call("KeyEvent", payload); });
+}
+if (CONTROL) {
+  reg("left", "Left", "left");
+  reg("left-a", "A", "left");
+  reg("right", "Right", "right");
+  reg("right-d", "D", "right");
+  reg("jump", "Up", "jump");
+  reg("jump-w", "W", "jump");
+  reg("jump-space", "Space", "jump");
+  reg("stop", "Down", "stop");
+  reg("stop-s", "S", "stop");
+}

@@ -18,6 +18,10 @@ class FakeBridge(QObject):
     windowsChanged = Signal(list)
     workAreaChanged = Signal(dict)
     workAreasChanged = Signal(list)
+    keyEvent = Signal(str)
+
+    def set_control_mode(self, on: bool) -> None:
+        self.control_mode = on
 
 
 def main() -> None:
@@ -37,10 +41,17 @@ def main() -> None:
     app.processEvents()
     assert o._win_x + o.width() >= far, (o._win_x, o.width(), far)
 
-    # 3. a resting ball far from the cat must be covered too
+    # 3. P42 layer rule: a resting ball lives on the BACK layer and must NOT
+    # stretch the front window; front toys (string/laser/carried) still do
     o.toys.spawn("ball", 200.0, 900.0)
     b = o._front_bounds()
-    assert b.x() <= 200 - 20 and b.right() >= far - 20, b
+    assert b.x() > 200 - 20, ("floor toy must stay out of front bounds", b)
+    assert b.x() <= far and b.right() >= far - 20, b
+    o.toys.spawn("string", 300.0, 800.0)
+    b = o._front_bounds()
+    assert b.x() <= 300 - 20, ("cursor tool must be covered", b)
+    o.clear_toys()
+    assert not o.toys.toys
 
     # 4. shrink after the delay: cat back to a compact spot, no toys
     o.clear_toys()
@@ -76,17 +87,31 @@ def main() -> None:
         assert br.contains(r), (r, br)
         assert kind in ("poop", "pee")
 
-    # 7. P39: status window toggle, refresh, buttons wired to the brain
+    # 7. P42: pinned status board — toggle, default rect, placement round trip
+    from plasmacat.overlay import STATUS_W, STATUS_H
     o.set_status_window(True)
-    app.processEvents()
-    assert o._status_win is not None and o.cust.status_window
-    o.cat.brain.litter_fill = 3.0
-    o._status_win.refresh()
-    assert o._status_win.btn_litter.text() == "Clean litter (3)"
-    o._status_win.btn_litter.click()
-    assert o.cat.brain.litter_fill == 0.0 and not o.cat.brain.litter_deposits
+    assert o.cust.status_window
+    r = o._status_rect()
+    assert not r.isNull() and r.width() == STATUS_W and r.height() == STATUS_H
+    assert o._status_sig() != ()
+    o.begin_placement("status")
+    o.desktop.set_cursor(1000, 500)
+    gr = o._ghost_rect()
+    assert gr.width() == STATUS_W and abs(gr.center().x() - 1000) <= 1
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    ev = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(1000, 500),
+                     Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                     Qt.KeyboardModifier.NoModifier)
+    o.mousePressEvent(ev)
+    assert o._placing is None, "left click must end the placement"
+    assert o.cust.status_pos is not None
+    exp_x = min(max(1000 - STATUS_W // 2, o.desktop.floor_x0),
+                o.desktop.floor_x1 - STATUS_W)
+    assert abs(o.cust.status_pos[0] - exp_x) < 2, o.cust.status_pos
     o.set_status_window(False)
     assert not o.cust.status_window
+    assert o._status_rect().isNull() and o._status_sig() == ()
 
     print("WINDOW_GEO_OK")
 
