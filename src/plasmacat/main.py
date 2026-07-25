@@ -88,7 +88,6 @@ def main() -> int:
     from plasmacat.overlay import Overlay
     from plasmacat.persist import CatState, Customization, GameState
     from plasmacat.sound.packs import SoundPlayer
-    from plasmacat.sound.synth import build_pack
     from plasmacat.ui.wizard import SetupWizard
     from plasmacat import persist
 
@@ -111,16 +110,15 @@ def main() -> int:
         return 1
     bridge.start_watchdog(app)  # reloads the script if Plasma/KWin restarts
 
-    pack_dir = data_dir / "sounds" / "retro"
-    build_pack(pack_dir)
-    # natural pack ships in the repo (assets/) and is copied on first run
+    # the natural pack (real recordings, P49) ships in the repo (assets/)
+    # and is copied to the data dir on first run
     natural_src = ROOT / "assets" / "sounds" / "natural"
     natural_dst = data_dir / "sounds" / "natural"
     natural_dst.mkdir(parents=True, exist_ok=True)
     for f in natural_src.glob("*.*"):
         if not (natural_dst / f.name).exists():
             shutil.copy2(f, natural_dst / f.name)
-    player = SoundPlayer(data_dir / "sounds", pack=cust.sound_pack,
+    player = SoundPlayer(data_dir / "sounds",
                          muted=not cust.sound_on, volume=cust.volume)
 
     overlay = Overlay(bridge, player=player, cust=cust, debug="--debug" in sys.argv)
@@ -369,24 +367,6 @@ def main() -> int:
 
         a.triggered.connect(set_vol)
         volume_menu.addAction(a)
-
-    pack_menu = sound_menu.addMenu("Sound pack")
-    pack_actions: dict[str, QAction] = {}
-    for pid, label in (("retro", "Retro (8-bit synth)"),
-                       ("natural", "Natural (real cat)")):
-        a = QAction(label, pack_menu)
-        a.setCheckable(True)
-        a.setChecked(player.pack == pid)
-        pack_actions[pid] = a
-
-        def set_sound_pack(checked: bool, p: str = pid) -> None:
-            player.set_pack(p)
-            overlay.cust.sound_pack = p
-            for k, x in pack_actions.items():
-                x.setChecked(k == p)
-
-        a.triggered.connect(set_sound_pack)
-        pack_menu.addAction(a)
     menu.addSeparator()
 
     add_kitten_action = QAction("Add kitten…", menu)
@@ -425,7 +405,6 @@ def main() -> int:
             # sound is global: mirror it onto the primary cust (saved there)
             overlay.cust.sound_on = c.sound_on
             overlay.cust.volume = c.volume
-            overlay.cust.sound_pack = c.sound_pack
             player.set_muted(not c.sound_on)
             player.set_volume(c.volume)
             tray.setIcon(tray_icon(overlay.cust))

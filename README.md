@@ -48,9 +48,9 @@ attached to you over time.
 - **Food & water**: food bowl with a little shop (Kibble/Tuna/Milk/Catnip —
   she likes them differently), and a perpetual water fountain that never
   runs dry.
-- **Sound**: retro synth pack and a natural pack with real cat recordings —
-  meows, purring, eating and drinking (see
-  `assets/sounds/natural/ATTRIBUTION.md`), mute + volume in the tray.
+- **Sound**: real cat recordings only — meows, purring, eating, drinking,
+  scratching and more (see `assets/sounds/natural/ATTRIBUTION.md`), mute +
+  volume in the tray.
 - **Status board**: an optional pinned panel painted on the desktop level
   (behind your windows, never in the way, can't get lost) with all need
   bars — toggle and position it from the tray, it remembers its place.
@@ -112,7 +112,8 @@ If the app crashed and left the KWin helper script behind:
   PYTHONPATH=src .venv/bin/python tools/sim_test.py   # must end with SIM_TEST_OK
   ```
 - Sprites are generated procedurally in code (`src/plasmacat/cat/sprites.py`),
-  so every pose recolors for free. Sounds are numpy-synthesized.
+  so every pose recolors for free. Sounds are real recordings
+  (`assets/sounds/natural/`).
 
 See `PLAN.md` (design) and `DECISIONS.md` (measured facts & trade-offs) for
 the architecture.

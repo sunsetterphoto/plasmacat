@@ -34,9 +34,13 @@ QtDBus for the bridge service, QtMultimedia for sound (fallback: `pw-play`/`papl
 User chose generated art over CC0 packs. This makes wizard customization (fur color, pattern,
 eyes, accessory) a palette/render operation, not an asset swap.
 
-## D6 — Sound: synthesized retro pack is default; optional CC0 pack on user request
-numpy-synthesized 8-bit-style WAVs (meow, purr, eat, drink, boing, sleep). Mute + volume in tray.
-Optional CC0 download pack only with explicit user approval (attribution in README).
+## D6 — Sound: natural pack only (real recordings); 8-bit synth removed (P49)
+All 12 effects (meow, meow2, mew, chirp, boing, beg, purr, eat, drink, scratch,
+puke, chime) are real recordings in `assets/sounds/natural/` (see ATTRIBUTION.md:
+CC0 / public domain / CC BY-SA, via Wikimedia Commons), loudnorm-normalized.
+Effects without a direct source (scratch, boing, puke) are derived from the same
+recordings with ffmpeg filters — no synthesized 8-bit audio anywhere.
+QtMultimedia QSoundEffect, fallback pw-play/paplay. Mute + volume in tray.
 
 ## D7 — Persistence: JSON via QStandardPaths
 `~/.local/share/plasmacat/save.json` on Linux. Timestamp-based offline need decay.

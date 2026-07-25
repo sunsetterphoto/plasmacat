@@ -231,6 +231,7 @@ class Overlay(QWidget):
         self._last_fountain_frame = -1
         self._prev_puke_count = 0
         self._last_back_toy_sig: tuple = ()  # P42: floor toys on the back layer
+        self._last_back_sig: tuple = ()      # P49: back-layer repaint gating
         self._furn_move_ticks = 0            # P32 flush cadence, back layer
         self._prev_furn_moving = False
         self._move_ticks = 0               # P32 full-flush cadence
@@ -910,9 +911,22 @@ class Overlay(QWidget):
         back_toy_moving = any(not self._toy_front(t)
                               and (abs(t.vx) > 1 or abs(t.vy) > 1)
                               for t in self.toys.toys)
-        furn_moving = (moving and any_back) or back_toy_moving
+        # P49 back-layer gating: repaint ONLY when back content actually
+        # changed. Before, any back-level cat (even a perfectly still one)
+        # repainted her region every tick, and breath frames / the bobbing
+        # zzz bubble kept rewriting the same slice — at fractional scaling
+        # KWin drops partial damage (P32), which showed up as the furniture
+        # under a sleeping cat visibly "trembling".
+        back_sig = tuple(
+            (self._anim_key(c), c.frame, int(c.body.x), int(c.body.y),
+             c.body.facing, c.brain.bubble,
+             int(2.5 * math.sin(self._time * 3.0)) if c.brain.bubble else 0)
+            for c in self.cats if self.cat_layer(c) != "front")
+        back_changed = back_sig != self._last_back_sig
+        self._last_back_sig = back_sig
+        furn_moving = ((moving and any_back) or back_toy_moving or back_changed)
         self._furn_move_ticks = self._furn_move_ticks + 1 if furn_moving else 0
-        if any_back or self._doors or back_toys_changed:
+        if back_changed or back_toys_changed or self._doors:
             if (furn_moving and self._furn_move_ticks % 3 == 0) \
                     or (not furn_moving and self._prev_furn_moving):
                 self._furn_update_all()  # P32 full flush on the back layer

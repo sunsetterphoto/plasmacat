@@ -121,6 +121,36 @@ def main() -> None:
     o._on_work_areas([{"x": 0, "y": 0, "w": 1920, "h": 1000}])
     assert o.cat.brain.food_x < 1920, "off-world bowl must be re-anchored"
 
+    # 9. P49: a static back-level cat must NOT repaint the furniture layer
+    #    every tick (constant region repaints + the KWin damage-drop made
+    #    furniture "tremble" under a sleeping cat); real changes still repaint.
+    o.cat.brain._level = "back"
+    o.cat.brain.state = "sit"
+    o.cat.brain.state_left = 999.0  # pin her: no behavior override mid-test
+    o.cat.brain.bubble = None
+    for k in o.cat.brain.needs:
+        o.cat.brain.needs[k] = 100.0  # no need bubble
+    o.cat._update_anim = lambda dt: None  # frozen anim for the gating test
+    o._prev_back[o.cat] = True  # no door transition to wait out
+    o.cat.body.stop()           # drop any walk the QTimer ticks started
+
+    class _FakeClock:  # offscreen ticks land in the same ms -> dt 0 no-ops
+        def restart(self) -> float:
+            return 16.0
+    o._clock = _FakeClock()
+    calls = []
+    o._furn_update = lambda rect: calls.append(rect)
+    o._furn_update_all = lambda: calls.append("all")
+    o._tick()              # primes the back signature
+    calls.clear()
+    for _ in range(10):
+        o._tick()
+    assert not calls, f"static back cat repainted: {calls}"
+    assert o.cat_layer(o.cat) == "back", "test setup: cat must be back-level"
+    o.cat.body.x += 30  # a real back-layer change
+    o._tick()
+    assert calls, "moving back cat must repaint"
+
     print("WINDOW_GEO_OK")
 
 
