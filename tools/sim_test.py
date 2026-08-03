@@ -1590,6 +1590,46 @@ def main() -> None:
     assert seen_social & {"cuddle", "chase_peer"}, seen_social
     print("P48: cat-cat social life OK")
 
+    # -- P52: narrow-platform clamps (grumpy walk-off + startle) ---------
+    # On narrow furniture tops (the 57 px scratching-post top) the old
+    # x0+90/x1-90 clamp INVERTED and pointed off the platform: a grumpy
+    # walk-off or a startle hop sent her off the edge and she fell.
+    # _walk_range collapses to the platform center there (P15 jitter fix).
+    from plasmacat.bridge.desktop import Platform
+    from plasmacat.cat.brain import Brain
+    from plasmacat.cat.physics import CatBody
+
+    narrow_desktop = DesktopState(2000, 1200)
+    narrow_desktop.set_work_areas([{"x": 0, "y": 0, "w": 2000, "h": 1200}])
+    post_top = Platform(970, 1027, 1008, "Kratzbaum")   # 57 px wide
+    narrow_desktop.set_extra_platforms([post_top])
+
+    # grumpy walk-off: the walk target must stay on the narrow platform
+    grumpy = Brain(rng=random.Random(9))
+    for k in grumpy.needs:
+        grumpy.needs[k] = 10.0                           # mood 10 -> grumpy
+    gbody = CatBody(975, 1008)
+    gbody.platform = post_top
+    grumpy.rng = random.Random(1)                        # first roll < 0.5
+    grumpy.on_stroke(gbody)
+    assert grumpy.state == "annoyed", grumpy.state
+    assert gbody.target_x is None or post_top.contains_x(gbody.target_x), \
+        f"walk-off target off the narrow platform: {gbody.target_x}"
+
+    # startle hop: she must land back on the narrow platform, not below it
+    startled = Brain(rng=random.Random(9))
+    sbody = CatBody(1000, 1008)
+    sbody.platform = post_top
+    startled.on_startle(sbody, narrow_desktop)
+    assert startled.state == "startle_air", startled.state
+    for _ in range(240):
+        sbody.tick(DT, narrow_desktop)
+        if not sbody.airborne:
+            break
+    assert sbody.platform is post_top, \
+        f"startle jumped off the narrow platform: {sbody.platform}"
+    print("P52: narrow-platform clamps OK")
+
     print("SIM_TEST_OK")
 
 

@@ -371,7 +371,11 @@ class Brain:
             # grumpy cat has no patience: walks off (no affection gained)
             plat = body.platform
             if plat is not None and self.state not in ("sleep", "eating", "drinking"):
-                dest = min(max(body.x - body.facing * 180, plat.x0 + 90), plat.x1 - 90)
+                # _walk_range: on narrow furniture tops (e.g. the 57 px post
+                # top) the old x0+90/x1-90 clamp inverts and points OFF the
+                # platform — she would walk off the edge and fall
+                lo, hi = self._walk_range(plat)
+                dest = min(max(body.x - body.facing * 180, lo), hi)
                 body.walk_to(dest, WALK_SPEED)
                 self.state = "annoyed"
                 self.state_left = 4.0
@@ -519,7 +523,9 @@ class Brain:
         cx, _cy = desktop.cursor
         direction = -1.0 if cx > body.x else 1.0
         plat = body.platform or desktop.platform_below(body.x, body.y)
-        tx = min(max(body.x + direction * 140, plat.x0 + 90), plat.x1 - 90)
+        # _walk_range: narrow furniture tops — see the grumpy walk-off above
+        lo, hi = self._walk_range(plat)
+        tx = min(max(body.x + direction * 140, lo), hi)
         self.sounds.append("mew")
         self.log.append("startled!")
         if body.jump_to(tx, plat.y):

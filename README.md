@@ -73,9 +73,12 @@ attached to you over time.
 git clone https://github.com/sunsetterphoto/plasmacat.git
 cd plasmacat
 python3 -m venv .venv
-.venv/bin/pip install PySide6-Essentials PySide6-Addons numpy pillow
+.venv/bin/pip install PySide6-Essentials PySide6-Addons
 ./run.sh
 ```
+
+(pillow is only needed for the sprite-art dev tool:
+`.venv/bin/pip install pillow` before `tools/render_sheet.py`.)
 
 The first run opens the customization wizard. State is saved every 30 s to
 `~/.local/share/catgame/save.json` (needs decay while you're away).

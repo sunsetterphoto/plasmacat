@@ -5,7 +5,8 @@ Usage:
   python -m plasmacat.main --unload-bridge       unload a leftover KWin script and exit
 
 First run (no save file) opens the customization wizard. State is saved to
-~/.local/share/plasmacat/save.json every 30 s and on quit.
+~/.local/share/catgame/save.json every 30 s and on quit (the app name stays
+'catgame' for save continuity across the PlasmaCat rename, P33).
 """
 
 from __future__ import annotations

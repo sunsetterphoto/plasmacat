@@ -1,12 +1,15 @@
 """Persistence: save/load game state as JSON, with offline need decay.
 
-Save file: <AppDataLocation>/save.json (Linux: ~/.local/share/plasmacat/save.json).
-No Qt here except nothing — pure json/dataclasses so it's testable.
+Save file: <AppDataLocation>/save.json (Linux: ~/.local/share/catgame/save.json —
+the app name stays 'catgame' for save continuity across the PlasmaCat rename).
+Pure json/dataclasses, no Qt — testable headless.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -149,7 +152,18 @@ def save(path: Path, state: GameState) -> None:
         "puke_spots": state.puke_spots,
         "saved_at": state.saved_at,
     }
-    path.write_text(json.dumps(payload, indent=2))
+    # atomic write: a crash mid-save must not truncate save.json — the old
+    # direct write_text left broken JSON behind, and load() then silently
+    # started a fresh game (all progress lost). tmp + os.replace is atomic;
+    # the previous good save is kept as save.json.bak.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    if path.exists():
+        try:
+            shutil.copyfile(path, path.with_name(path.name + ".bak"))
+        except OSError:
+            pass
+    os.replace(tmp, path)
 
 
 def _cat_from_json(c: dict) -> CatState:
@@ -169,47 +183,49 @@ def load(path: Path) -> GameState | None:
         return None
     try:
         d = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        cats_raw = d.get("cats")
+        if isinstance(cats_raw, list) and cats_raw:
+            cats = [_cat_from_json(c) for c in cats_raw if isinstance(c, dict)] \
+                or [CatState()]
+        else:
+            # legacy v1 save (single cat at the top level, P47 migration):
+            # the veteran cat keeps her grown-up body (stage 6, not a kitten)
+            cats = [CatState(
+                customization=Customization.from_json(d.get("customization", {})),
+                needs={k: float(v) for k, v in d.get("needs", {}).items()},
+                attachment_xp=float(d.get("attachment_xp", 0.0)),
+                petted_strokes=int(d.get("petted_strokes", 0)),
+                age=6.0,
+                care=0.5,
+                fav_toy=d.get("fav_toy", ""),
+            )]
+        state = GameState(
+            cats=cats,
+            toys=[t for t in d.get("toys", []) if isinstance(t, dict)],
+            food_type=d.get("food_type", "kibble"),
+            food_fill=float(d.get("food_fill", 100.0)),
+            water_fill=float(d.get("water_fill", 100.0)),
+            food_x=d.get("food_x"),
+            water_x=d.get("water_x"),
+            scratch_x=d.get("scratch_x"),
+            bed_x=d.get("bed_x"),
+            grass_x=d.get("grass_x"),
+            grass_charges=float(d.get("grass_charges", 3.0)),
+            litter_x=d.get("litter_x"),
+            litter_fill=float(d.get("litter_fill", 0.0)),
+            litter_deposits=[x for x in d.get("litter_deposits", [])
+                             if x in ("poop", "pee")],
+            tree_x=d.get("tree_x"),
+            wheel_x=d.get("wheel_x"),
+            box_x=d.get("box_x"),
+            shelves=[s for s in d.get("shelves", []) if isinstance(s, dict)],
+            puke_spots=[float(x) for x in d.get("puke_spots", [])],
+            saved_at=float(d.get("saved_at", 0.0)),
+        )
+    except (OSError, json.JSONDecodeError, ValueError, TypeError, KeyError):
+        # corrupt or partially written save (P52): fall back to a fresh game
+        # instead of crashing at startup; save.json.bak holds the last good one
         return None
-    cats_raw = d.get("cats")
-    if isinstance(cats_raw, list) and cats_raw:
-        cats = [_cat_from_json(c) for c in cats_raw if isinstance(c, dict)] \
-            or [CatState()]
-    else:
-        # legacy v1 save (single cat at the top level, P47 migration):
-        # the veteran cat keeps her grown-up body (stage 6, not a kitten)
-        cats = [CatState(
-            customization=Customization.from_json(d.get("customization", {})),
-            needs={k: float(v) for k, v in d.get("needs", {}).items()},
-            attachment_xp=float(d.get("attachment_xp", 0.0)),
-            petted_strokes=int(d.get("petted_strokes", 0)),
-            age=6.0,
-            care=0.5,
-            fav_toy=d.get("fav_toy", ""),
-        )]
-    state = GameState(
-        cats=cats,
-        toys=[t for t in d.get("toys", []) if isinstance(t, dict)],
-        food_type=d.get("food_type", "kibble"),
-        food_fill=float(d.get("food_fill", 100.0)),
-        water_fill=float(d.get("water_fill", 100.0)),
-        food_x=d.get("food_x"),
-        water_x=d.get("water_x"),
-        scratch_x=d.get("scratch_x"),
-        bed_x=d.get("bed_x"),
-        grass_x=d.get("grass_x"),
-        grass_charges=float(d.get("grass_charges", 3.0)),
-        litter_x=d.get("litter_x"),
-        litter_fill=float(d.get("litter_fill", 0.0)),
-        litter_deposits=[x for x in d.get("litter_deposits", [])
-                         if x in ("poop", "pee")],
-        tree_x=d.get("tree_x"),
-        wheel_x=d.get("wheel_x"),
-        box_x=d.get("box_x"),
-        shelves=[s for s in d.get("shelves", []) if isinstance(s, dict)],
-        puke_spots=[float(x) for x in d.get("puke_spots", [])],
-        saved_at=float(d.get("saved_at", 0.0)),
-    )
     return state
 
 
