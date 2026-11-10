@@ -88,9 +88,9 @@ def main() -> None:
         assert kind in ("poop", "pee")
 
     # 7. P42: pinned status board — toggle, default rect, placement round trip
-    from plasmacat.world.overlay import STATUS_W, STATUS_H
-    o.set_status_window(True)
-    assert o.cust.status_window
+    from plasmacat.world.status_board import STATUS_W, STATUS_H
+    o.set_status_board(True)
+    assert o.settings.status_board
     r = o._status_rect()
     assert not r.isNull() and r.width() == STATUS_W and r.height() == STATUS_H
     assert o._status_sig() != ()
@@ -105,12 +105,12 @@ def main() -> None:
                      Qt.KeyboardModifier.NoModifier)
     o.mousePressEvent(ev)
     assert o._placing is None, "left click must end the placement"
-    assert o.cust.status_pos is not None
+    assert o.settings.status_pos is not None
     exp_x = min(max(1000 - STATUS_W // 2, o.desktop.floor_x0),
                 o.desktop.floor_x1 - STATUS_W)
-    assert abs(o.cust.status_pos[0] - exp_x) < 2, o.cust.status_pos
-    o.set_status_window(False)
-    assert not o.cust.status_window
+    assert abs(o.settings.status_pos[0] - exp_x) < 2, o.settings.status_pos
+    o.set_status_board(False)
+    assert not o.settings.status_board
     assert o._status_rect().isNull() and o._status_sig() == ()
 
     # 8. P43: work-area changes keep placed bowls, recover off-world ones

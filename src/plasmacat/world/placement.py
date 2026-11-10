@@ -6,11 +6,17 @@ from PySide6.QtCore import QRect, Qt
 
 from plasmacat.cat.render import lh, lw
 
-from plasmacat.world.status_board import STATUS_H, STATUS_W
+from plasmacat.world.status_board import STATUS_W
 
 
 class PlacementMixin:
     """Mixed into Overlay; uses its state (self.desktop, self.cats, …)."""
+
+    def begin_move(self, kind: str, index: int | None = None) -> None:
+        """Pick up a placed piece and drop it elsewhere (a shelf keeps its
+        slot instead of becoming a new one). Cancel leaves it where it was."""
+        self._move_index = index
+        self.begin_placement(kind)
 
     def begin_placement(self, kind: str) -> None:
         """kind: 'ball' | 'plush' | 'food_bowl' | 'water_fountain' |
@@ -27,6 +33,7 @@ class PlacementMixin:
         self.raise_()
     def _end_placement(self) -> None:
         self._placing = None
+        self._move_index = None
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
         self.showNormal()
         self._sync_window_geometry(force=True)  # back to the small window
@@ -50,8 +57,8 @@ class PlacementMixin:
             gx = min(max(gr.x(), self.desktop.floor_x0),
                      self.desktop.floor_x1 - STATUS_W)
             gy = min(max(float(gr.y()), 0.0),
-                     self.desktop.floor_y_at(gr.center().x()) - STATUS_H)
-            self.cust.status_pos = [gx, gy]
+                     self.desktop.floor_y_at(gr.center().x()) - self._status_h())
+            self.settings.status_pos = [gx, gy]
             self._furn_update_all()
         else:
             x = min(max(pos.x(), self.desktop.floor_x0 + 90), self.desktop.floor_x1 - 90)
@@ -62,8 +69,12 @@ class PlacementMixin:
             elif kind == "wall_shelf":
                 # fixed to the 'wall' at the dropped height — never falls
                 y = min(max(pos.y(), 140.0), self.desktop.floor_y_at(pos.x()) - 80)
-                self.cat.brain.shelves.append((x, y))
-                del self.cat.brain.shelves[:-4]  # keep at most 4 shelves
+                idx = getattr(self, "_move_index", None)
+                if idx is not None and 0 <= idx < len(self.cat.brain.shelves):
+                    self.cat.brain.shelves[idx] = (x, y)
+                else:
+                    self.cat.brain.shelves.append((x, y))
+                    del self.cat.brain.shelves[:-4]  # keep at most 4 shelves
                 self._sync_furniture_platforms()
             elif kind == "box":
                 self.cat.brain.box_x = x
@@ -89,8 +100,8 @@ class PlacementMixin:
             return QRect()
         cx, cy = self.desktop.cursor
         if self._placing == "status":  # the pinned status board (P42)
-            return QRect(cx - STATUS_W // 2, cy - STATUS_H // 2,
-                         STATUS_W, STATUS_H)
+            h = self._status_h()
+            return QRect(cx - STATUS_W // 2, cy - h // 2, STATUS_W, h)
         key = {"water_fountain": "fountain_0"}.get(self._placing, self._placing)
         pm = self._props[key]
         return QRect(cx - lw(pm) // 2, cy - lh(pm) // 2,

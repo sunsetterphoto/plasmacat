@@ -27,6 +27,15 @@ GAIN: dict[str, float] = {
 }
 
 
+# Effects by group (Sound tab: each group can be switched off)
+GROUP_OF: dict[str, str] = {
+    "meow": "voice", "meow2": "voice", "mew": "voice", "beg": "voice",
+    "chirp": "voice", "hiss": "voice", "purr": "purr",
+    "eat": "eating", "drink": "eating", "bubble": "eating",
+    "boing": "play", "scratch": "play", "chime": "alerts", "puke": "alerts",
+}
+
+
 class SoundPlayer:
     def __init__(self, sounds_dir: Path, muted: bool = False,
                  volume: float = 0.7) -> None:
@@ -35,6 +44,7 @@ class SoundPlayer:
         self.volume = volume
         self._effects: dict[str, QSoundEffect] = {}
         self._last: dict[str, float] = {}
+        self._groups_off: set[str] = set()
         self._qt_ok = True
         self._player_bin = shutil.which("pw-play") or shutil.which("paplay")
         for wav in sorted(self.sounds_dir.glob("*.wav")):
@@ -56,8 +66,11 @@ class SoundPlayer:
             print("[sound] QtMultimedia failed — falling back to",
                   self._player_bin or "silence")
 
+    def set_group_enabled(self, group: str, on: bool) -> None:
+        (self._groups_off.discard if on else self._groups_off.add)(group)
+
     def play(self, name: str, cooldown: float = 0.4) -> None:
-        if self.muted:
+        if self.muted or GROUP_OF.get(name) in self._groups_off:
             return
         now = time.monotonic()
         if now - self._last.get(name, 0.0) < cooldown:

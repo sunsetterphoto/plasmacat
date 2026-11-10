@@ -31,10 +31,10 @@ from plasmacat.cat.interactions import CursorTracker, InteractionDetector
 from plasmacat.cat.minigames import MouseHunt
 from plasmacat.cat.render import SpriteBank, art_pixel_device, lh, lw, prop_pixmap
 from plasmacat.cat.toys import ToyManager
-from plasmacat.persist import Customization
+from plasmacat.persist import Customization, Settings
 from plasmacat.world.furniture_layer import FurnitureLayer
 from plasmacat.world.placement import PlacementMixin
-from plasmacat.world.status_board import STATUS_H, STATUS_W, StatusBoardMixin
+from plasmacat.world.status_board import STATUS_W, StatusBoardMixin
 from plasmacat.world.window_policy import WIN_MIN_H, WIN_MIN_W, WindowPolicyMixin  # noqa: F401
 
 FPS_MS = 16
@@ -58,7 +58,8 @@ DOOR_DUR = 0.9  # seconds for the cat-door transition flourish (P27)
 
 class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
     def __init__(self, bridge, player=None, cust: Customization | None = None,
-                 debug: bool = False, parent=None) -> None:
+                 settings: Settings | None = None, debug: bool = False,
+                 parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("plasmacat")
         self.setWindowFlags(
@@ -86,6 +87,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self.scale = self.prop_scale = 1.0   # logical px per art pixel
         self._props: dict = {}
         self.cust = cust or Customization()
+        self.settings = settings or Settings()
         self.player = player
         self.debug = debug
         self.toys = ToyManager(rng=random.Random())
@@ -125,7 +127,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self._shrink_since: float | None = None
         self._last_status_sig: tuple = ()  # P42: pinned status board
         self._hunt: MouseHunt | None = None  # P42: mouse-hunt session
-        self.notify = None  # optional callback(title, msg) set by the tray
+        self.notify = None  # optional callback(title, msg) set by the app
+        self._hidden: set[str] = set()   # reasons to hide all windows
         self._bridge = bridge
         self.furniture_layers = [FurnitureLayer(self, s)
                                  for s in QGuiApplication.screens()]
@@ -183,6 +186,78 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         br, bl = self._make_banks(cust, cat.brain.stage)
         self._banks[cat] = (br, bl, cat.brain.stage)
         return cat
+
+    def remove_cat(self, cat: Cat) -> bool:
+        """Remove a cat from the household (never the last one)."""
+        if cat not in self.cats or len(self.cats) <= 1:
+            return False
+        self.cats.remove(cat)
+        for d in (self._banks, self._doors, self._prev_back, self._prev_brain_state):
+            d.pop(cat, None)
+        for c in self.cats:
+            c.brain.peers = [(o.body, o.brain) for o in self.cats if o is not c]
+        if self._active is cat:
+            self._active = None
+        self.cust = self.cats[0].cust
+        self.update()
+        self._furn_update_all()
+        return True
+
+    def set_hidden(self, reason: str, on: bool) -> None:
+        """Hide every PlasmaCat window while any reason holds ('pause' from
+        the tray, 'fullscreen' while a fullscreen window is active). The
+        simulation keeps running, so needs go on as usual."""
+        hidden_before = bool(self._hidden)
+        (self._hidden.add if on else self._hidden.discard)(reason)
+        if bool(self._hidden) == hidden_before:
+            return
+        windows = [self] + list(self.furniture_layers)
+        for w in windows:
+            w.setVisible(not self._hidden)
+        if not self._hidden:
+            self._sync_window_geometry(force=True)
+            self._furn_update_all()
+
+    @property
+    def hidden(self) -> bool:
+        return bool(self._hidden)
+
+    def _notify(self, kind: str, title: str, msg: str) -> None:
+        """A desktop notification, if the user wants this kind (System tab)."""
+        if self.notify is not None and self.settings.notify.get(kind, True):
+            self.notify(title, msg)
+
+    # -- furniture management (Control Center → Home) ---------------------------
+
+    FURNITURE = (("food_bowl", "Food bowl", "food_x"),
+                 ("water_fountain", "Water fountain", "water_x"),
+                 ("scratch_post", "Scratching post", "scratch_x"),
+                 ("cat_bed", "Cat bed", "bed_x"),
+                 ("cat_grass", "Cat grass", "grass_x"),
+                 ("litter_0", "Litter box", "litter_x"),
+                 ("cat_tree", "Big cat tree", "tree_x"),
+                 ("wheel_stand", "Exercise wheel", "wheel_x"),
+                 ("box", "Cardboard box", "box_x"))
+    BOWLS = ("food_bowl", "water_fountain")   # movable, never removed
+
+    def furniture_items(self) -> list[tuple[str, str, int | None]]:
+        """Every placed piece: (kind, label, shelf index or None)."""
+        b = self.cat.brain
+        items = [(kind, label, None) for kind, label, attr in self.FURNITURE
+                 if getattr(b, attr) is not None]
+        items += [("wall_shelf", f"Wall shelf {i + 1}", i) for i in range(len(b.shelves))]
+        return items
+
+    def remove_furniture(self, kind: str, index: int | None = None) -> None:
+        b = self.cat.brain
+        if kind == "wall_shelf":
+            if index is not None and 0 <= index < len(b.shelves):
+                del b.shelves[index]
+        elif kind not in self.BOWLS:
+            attr = next(a for k, _l, a in self.FURNITURE if k == kind)
+            setattr(b, attr, None)
+        self._sync_furniture_platforms()
+        self._furn_update_all()
 
     def add_kitten(self, cust: Customization) -> Cat | None:
         """Tray 'Add kitten': a new stage-0 cat near the cursor."""
@@ -261,9 +336,9 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self._dpr = 0.0  # force a rebuild
         self._apply_dpr(self.devicePixelRatioF())
 
-    def set_customization(self, cust: Customization) -> None:
-        """Re-skin the ACTIVE cat live (from the tray 'Customize...' action)."""
-        cat = self.active
+    def set_customization(self, cust: Customization, cat: Cat | None = None) -> None:
+        """Re-skin a cat live (default: the cat at the cursor)."""
+        cat = cat or self.active
         cat.cust = cust
         if cat is self.cats[0]:
             self.cust = cust
@@ -290,14 +365,14 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         # bed/wheel (P24)
         self._sync_furniture_platforms()
         # a placed status board must not end up under a grown panel (P42)
-        if self.cust.status_pos is not None:
-            px, py = self.cust.status_pos
+        if self.settings.status_pos is not None:
+            px, py = self.settings.status_pos
             sx = min(max(px, self.desktop.floor_x0),
                      self.desktop.floor_x1 - STATUS_W)
             sy = min(max(py, 0.0),
-                     self.desktop.floor_y_at(px + STATUS_W / 2) - STATUS_H)
-            if [sx, sy] != self.cust.status_pos:
-                self.cust.status_pos = [sx, sy]
+                     self.desktop.floor_y_at(px + STATUS_W / 2) - self._status_h())
+            if [sx, sy] != self.settings.status_pos:
+                self.settings.status_pos = [sx, sy]
                 self._furn_update(self._status_rect())
 
     def _screens_changed(self, _screen) -> None:
@@ -622,10 +697,9 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         if self._hunt is not None:  # P42 mini-game session
             self._hunt.tick(dt, self.desktop, self.cats, self.toys, fx_sounds)
             if not self._hunt.active:
-                if self.notify is not None:
-                    self.notify("Mouse hunt",
-                                f"Time! Your cats caught {self._hunt.score} "
-                                f"{'mouse' if self._hunt.score == 1 else 'mice'}.")
+                self._notify("games", "Mouse hunt",
+                             f"Time! Your cats caught {self._hunt.score} "
+                             f"{'mouse' if self._hunt.score == 1 else 'mice'}.")
                 self._hunt = None
                 self._furn_update_all()  # the leftover mice scurry off
 
@@ -687,16 +761,15 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
             self._last_status_sig = status_sig
             self._furn_update(self._status_rect())
         # user notifications (P25): full litter box / vomit on the floor
-        if self.notify is not None:
-            for cat in self.cats:
-                st = cat.brain.state
-                if st == "litter_beg" \
-                        and self._prev_brain_state.get(cat) != "litter_beg":
-                    self.notify("PlasmaCat", f"{cat.cust.name}: the litter box "
-                                           "is full — please clean it!")
-            if len(self.cat.brain.puke_spots) > self._prev_puke_count:
-                self.notify("PlasmaCat", "A cat vomited on the floor — "
-                                       "clean it up (tray menu)!")
+        for cat in self.cats:
+            st = cat.brain.state
+            if st == "litter_beg" \
+                    and self._prev_brain_state.get(cat) != "litter_beg":
+                self._notify("litter", "PlasmaCat", f"{cat.cust.name}: the litter "
+                             "box is full — please clean it!")
+        if len(self.cat.brain.puke_spots) > self._prev_puke_count:
+            self._notify("vomit", "PlasmaCat", "A cat vomited on the floor — "
+                         "clean it up (Control Center → Home)!")
         self._prev_brain_state = {c: c.brain.state for c in self.cats}
         self._prev_puke_count = len(self.cat.brain.puke_spots)
         new_front, new_back = self._layer_regions()
@@ -822,8 +895,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         if self._hunt is not None:
             return  # a hunt is already running
         self._hunt = MouseHunt(rng=random.Random())
-        if self.notify is not None:
-            self.notify("Mouse hunt", "Mice are loose! Catch 8 in 60 seconds.")
+        self._notify("games", "Mouse hunt", "Mice are loose! Catch 8 in 60 seconds.")
 
     # -- toys (called from the tray menu) --------------------------------------
 

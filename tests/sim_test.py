@@ -1122,14 +1122,15 @@ def main() -> None:
     # persistence round-trip (P39 status flag + P40 deposits)
     from pathlib import Path
     import tempfile
-    from plasmacat.persist import CatState, Customization, GameState, load, save
-    st = GameState(cats=[CatState(customization=Customization(status_window=True))],
-                   litter_fill=1.5, litter_deposits=["poop", "pee"])
+    from plasmacat.persist import CatState, Customization, GameState, Settings, load, save
+    st = GameState(cats=[CatState(customization=Customization())],
+                   litter_fill=1.5, litter_deposits=["poop", "pee"],
+                   settings=Settings(status_board=True))
     with tempfile.TemporaryDirectory() as td:
         save(Path(td) / "save.json", st)
         back = load(Path(td) / "save.json")
     assert back is not None and back.litter_deposits == ["poop", "pee"]
-    assert back.customization.status_window is True
+    assert back.settings.status_board is True
     print("P39/P40: litter deposits + persistence OK")
 
     # -- P42: toy consistency fixes ---------------------------------------------
@@ -1191,13 +1192,13 @@ def main() -> None:
     catC2.tick(DT, dC)
     assert dC.floor_x0 + 30 <= toyC2.x <= dC.floor_x1 - 30, toyC2.x
     # 4. status board position persists (P42)
-    st2 = GameState(cats=[CatState(customization=Customization(
-        status_window=True, status_pos=[100.0, 200.0]))])
+    st2 = GameState(cats=[CatState(customization=Customization())],
+                    settings=Settings(status_board=True, status_pos=[100.0, 200.0]))
     with tempfile.TemporaryDirectory() as td:
         save(Path(td) / "s2.json", st2)
         back2 = load(Path(td) / "s2.json")
     assert back2 is not None
-    assert back2.customization.status_pos == [100.0, 200.0]
+    assert back2.settings.status_pos == [100.0, 200.0]
     print("P42: toy fixes (stale target, clear toys, clamps) OK")
 
     # -- P42b: user control mode (WASD/arrows) ---------------------------------
