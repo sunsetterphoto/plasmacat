@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render a sprite review sheet (poses x coat patterns x life stages) to PNG.
 
-Usage: PYTHONPATH=src python3 tools/render_sheet.py [--out docs/sprites.png] [--px 3]
+Usage: PYTHONPATH=src python3 tools/render_sheet.py [--out docs/sprites.png] [--px 2]
 Qt only (offscreen), no extra dependencies.
 """
 

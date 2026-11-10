@@ -1,19 +1,16 @@
-# PlasmaCat repo ignores
+# Python / tooling
 .venv/
 __pycache__/
 *.pyc
-kwin/*.runtime.js
+.pytest_cache/
 
-# Private working files — never push these (sanitized repo)
+# private working files — never pushed
 PROGRESS.md
 AGENTS.md
 dev-backup-*.tar.gz
 /Bildschirmfoto*.png
 /Screenshot*.png
-
-# Local planning docs (never pushed)
 docs/superpowers/
-.pytest_cache/
 .superpowers/
 
 # updater markers (install dir only)
