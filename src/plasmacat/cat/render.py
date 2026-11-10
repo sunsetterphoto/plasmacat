@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 
 from plasmacat.cat import sprites
-from plasmacat.props import prop_to_pixels
+from plasmacat.world.props import prop_to_pixels
 
 
 def prop_pixmap(name: str, scale: int = 3) -> QPixmap:

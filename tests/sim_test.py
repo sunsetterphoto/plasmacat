@@ -780,7 +780,7 @@ def main() -> None:
     # sprite/prop integrity for the new states and props
     for k in ("retch", "box_peek"):
         assert k in sprites.SPRITES and k in ANIMATIONS, k
-    from plasmacat.props import PROPS
+    from plasmacat.world.props import PROPS
     for k in ("food_bowl", "food_bowl_empty", "fountain_0", "fountain_1",
               "fountain_2", "puke", "wall_shelf", "box", "box_front",
               "cat_door_0", "cat_door_1", "cat_door_2"):
@@ -1253,7 +1253,7 @@ def main() -> None:
 
     # -- P42c: mouse hunt mini-game ---------------------------------------------
     from plasmacat.cat.minigames import MAX_CAUGHT, MouseHunt
-    from plasmacat.props import prop_to_pixels
+    from plasmacat.world.props import prop_to_pixels
 
     w, h, _px = prop_to_pixels("mouse")  # sprite is valid + registered
     assert w == 14 and h == 8, (w, h)

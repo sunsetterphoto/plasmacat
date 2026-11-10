@@ -108,7 +108,7 @@ def run(argv: list[str]) -> int:
     from plasmacat.bridge.kwin import make_bridge
     from plasmacat.cat.brain import NEED_DECAY, offline_aging
     from plasmacat.cat.render import SpriteBank
-    from plasmacat.overlay import Overlay
+    from plasmacat.world.overlay import Overlay
     from plasmacat.persist import CatState, Customization, GameState
     from plasmacat.sound.player import SoundPlayer
     from plasmacat.ui.wizard import SetupWizard
@@ -398,7 +398,7 @@ def run(argv: list[str]) -> int:
     KITTEN_NAMES = ("Findus", "Luna", "Balu", "Kiki", "Mogli", "Nala", "Felix")
 
     def add_kitten() -> None:
-        from plasmacat.overlay import MAX_CATS
+        from plasmacat.world.overlay import MAX_CATS
         if len(overlay.cats) >= MAX_CATS:
             overlay.notify and overlay.notify(
                 "PlasmaCat", f"The home is full — {MAX_CATS} cats are enough!")

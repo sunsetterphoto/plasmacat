@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Offscreen test for the P37 small-window logic: content bounds, geometry
 sync (recenter/shrink), and the placement-mode fullscreen round trip.
-Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python tools/window_geo_test.py
+Run: pytest tests/test_window_policy.py
 """
 import os
 
@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
-from plasmacat.overlay import Overlay, WIN_MIN_W, WIN_MIN_H
+from plasmacat.world.overlay import Overlay, WIN_MIN_W, WIN_MIN_H
 
 
 class FakeBridge(QObject):
@@ -88,7 +88,7 @@ def main() -> None:
         assert kind in ("poop", "pee")
 
     # 7. P42: pinned status board — toggle, default rect, placement round trip
-    from plasmacat.overlay import STATUS_W, STATUS_H
+    from plasmacat.world.overlay import STATUS_W, STATUS_H
     o.set_status_window(True)
     assert o.cust.status_window
     r = o._status_rect()

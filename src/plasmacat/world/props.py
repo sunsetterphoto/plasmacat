@@ -462,3 +462,23 @@ def prop_to_pixels(name: str):
                 r, g, b = PROP_PALETTE[ch]
                 out.append((r, g, b, 255))
     return len(frame[0]), len(frame), out
+
+
+# Surfaces a cat can stand on, per furniture prop, measured against the art
+# at prop scale 3: (dx0, dx1, height above the floor, label). The label is the
+# platform's identity for the brain ("Karton", "Laufrad", …).
+FURNITURE_SURFACES: dict[str, list[tuple[float, float, float, str]]] = {
+    "cat_tree": [(-54, 42, 108, "Katzenbaum"), (-24, 66, 192, "Katzenbaum")],
+    "scratch_post": [(-30, 27, 192, "Kratzbaum")],   # wide top (canvas cols 2-21)
+    "cat_bed": [(-55, 55, 27, "Katzennest")],        # she lies IN the cushion
+    "wheel_stand": [(-60, 60, 36, "Laufrad")],       # inner track (canvas row 60)
+    "box": [(-55, 55, 30, "Karton")],                # she sits IN the box
+}
+
+
+def furniture_surfaces(kind: str, x: float, floor_y: float,
+                       prop_scale: int) -> list[tuple[float, float, float, str]]:
+    """World-space standing surfaces (x0, x1, y, label) of a prop at x."""
+    k = prop_scale / 3.0
+    return [(x + dx0 * k, x + dx1 * k, floor_y - h * k, label)
+            for dx0, dx1, h, label in FURNITURE_SURFACES.get(kind, [])]
