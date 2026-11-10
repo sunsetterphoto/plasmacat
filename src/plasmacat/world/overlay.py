@@ -29,7 +29,10 @@ from plasmacat.cat.household import Household
 from plasmacat.cat.cat import Cat
 from plasmacat.cat.interactions import CursorTracker, InteractionDetector
 from plasmacat.cat.minigames import MouseHunt
-from plasmacat.cat.render import SpriteBank, art_pixel_device, lh, lw, prop_pixmap
+from plasmacat.cat import sprites
+from plasmacat.cat.render import (
+    PROP_DETAIL, SpriteBank, art_pixel_device, lh, lw, prop_pixmap,
+)
 from plasmacat.cat.toys import ToyManager
 from plasmacat.persist import Customization, Settings
 from plasmacat.world.furniture_layer import FurnitureLayer
@@ -324,11 +327,13 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         if abs(dpr - self._dpr) < 1e-3 and self._props:
             return
         self._dpr = dpr
+        # one cell size for everything: cat grid cells and prop cells are
+        # the same size, so 1 prop pixel (PROP_DETAIL cells) = 1.5 old cat
+        # pixels (DETAIL cells) exactly, as the furniture art was designed
         self.device_px = art_pixel_device(dpr, self.pixel_size, self._size_factor)
-        self.prop_device_px = art_pixel_device(dpr, self.pixel_size,
-                                               1.5 * self._size_factor)
-        self.scale = self.device_px / dpr
-        self.prop_scale = self.prop_device_px / dpr
+        self.prop_device_px = self.device_px
+        self.scale = sprites.DETAIL * self.device_px / dpr       # per pose pixel
+        self.prop_scale = PROP_DETAIL * self.device_px / dpr     # per prop pixel
         self._props = {name: prop_pixmap(name, self.prop_device_px, dpr)
                        for name in PROP_NAMES}
         for cat in self.cats:
