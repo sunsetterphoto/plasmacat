@@ -433,7 +433,7 @@ class Overlay(QWidget):
         from the geometry: the window must span its work area (±8 px)."""
         cr = self._cat_rect(cat)
         cx, cy = cr.center().x(), cr.center().y()
-        for w in self.desktop._windows:
+        for w in self.desktop.windows:
             if not (w["x"] <= cx <= w["x"] + w["w"]
                     and w["y"] <= cy <= w["y"] + w["h"]):
                 continue

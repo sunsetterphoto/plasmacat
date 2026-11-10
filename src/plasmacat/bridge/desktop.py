@@ -23,8 +23,10 @@ class Platform:
     x0: float
     x1: float
     y: float          # top edge: the cat's feet rest at this y
-    caption: str = ""
+    caption: str = ""        # furniture label ('Karton', …); "" for windows
     floor: bool = False
+    win_id: str | None = None   # KWin internalId of the window (window tops)
+    win_x: float | None = None  # the window's own x (segments may be clipped)
 
     def contains_x(self, x: float, margin: float = 0.0) -> bool:
         return self.x0 - margin <= x <= self.x1 + margin
@@ -101,8 +103,11 @@ class DesktopState:
 
         return min(floors, key=dist)
 
-    def set_work_area(self, d: dict) -> None:
-        self.set_work_areas([d])
+    def floor_under(self, x: float) -> Platform:
+        """The floor the cat at x belongs to: the containing screen's floor,
+        or the nearest one when x is in a gap or off-world."""
+        p = self.floor_platform_at(x)
+        return p if p is not None else self.nearest_floor(x, self.floor_y_at(x))
 
     def set_work_areas(self, areas: list[dict]) -> None:
         wa = tuple((float(a["x"]), float(a["y"]), float(a["w"]), float(a["h"]))
@@ -115,6 +120,11 @@ class DesktopState:
 
     def set_cursor(self, x: int, y: int) -> None:
         self.cursor = (x, y)
+
+    @property
+    def windows(self) -> list[dict]:
+        """The visible normal windows, bottom→top stacking ({id,x,y,w,h})."""
+        return self._windows
 
     def set_windows(self, wins: list[dict]) -> None:
         self._windows = wins
@@ -137,7 +147,8 @@ class DesktopState:
             above = [a for a in wins[i + 1:]
                      if a["y"] <= w["y"] <= a["y"] + a["h"]]
             for x0, x1 in self._visible_segments(w, above):
-                plats.append(Platform(x0, x1, w["y"], w.get("caption", "")))
+                plats.append(Platform(x0, x1, w["y"], win_id=str(w.get("id", "")),
+                                      win_x=float(w["x"])))
         plats.extend(self._extra)
         # Highest surfaces first makes landing checks natural.
         plats.sort(key=lambda p: p.y)
@@ -163,14 +174,18 @@ class DesktopState:
         return [(s0, s1) for s0, s1 in segs if s1 - s0 >= 30.0]
 
     def find_platform(self, ref: Platform) -> Platform | None:
-        """The current platform matching a stale reference (window moved):
-        same kind, nearest position."""
+        """The current platform matching a stale reference: the same window
+        (by id — titles change all the time) or the same furniture/floor,
+        nearest position among its visible segments."""
         best: Platform | None = None
         best_d = 1e18
         for p in self.platforms:
             if p.floor != ref.floor:
                 continue
-            if not ref.floor and p.caption != ref.caption:
+            if ref.win_id is not None:
+                if p.win_id != ref.win_id:
+                    continue
+            elif not ref.floor and p.caption != ref.caption:
                 continue
             d = (p.x0 - ref.x0) ** 2 + (p.y - ref.y) ** 2
             if d < best_d:

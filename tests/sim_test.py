@@ -30,8 +30,8 @@ _brain_mod.time = _FixedTime()
 def main() -> None:
     desktop = DesktopState(1920, 1080)
     desktop.set_windows([
-        {"x": 700, "y": 500, "w": 500, "h": 400, "caption": "Fake Window"},
-        {"x": 0, "y": 0, "w": 1, "h": 1, "caption": "bogus helper"},  # filtered (D11)
+        {"x": 700, "y": 500, "w": 500, "h": 400, "id": "Fake Window"},
+        {"x": 0, "y": 0, "w": 1, "h": 1, "id": "bogus helper"},  # filtered (D11)
     ])
     assert len(desktop.platforms) == 2, desktop.platforms  # floor + window only
 
@@ -44,7 +44,7 @@ def main() -> None:
         cat.tick(DT, desktop)
         states_seen.add(cat.anim_state)
         min_energy = min(min_energy, cat.brain.needs["energy"])
-        if cat.body.platform and cat.body.platform.caption == "Fake Window":
+        if cat.body.platform and cat.body.platform.win_id == "Fake Window":
             hopped = True
         assert 0 <= cat.body.x <= 1920, cat.body.x
         assert 0 <= cat.body.y <= 1080, cat.body.y
@@ -486,10 +486,10 @@ def main() -> None:
     # -- P16: occlusion-clipped platforms + windows as walls --------------------
     dO = DesktopState(1920, 1080)
     dO.set_windows([
-        {"x": 100, "y": 500, "w": 600, "h": 400, "caption": "back"},
-        {"x": 500, "y": 400, "w": 700, "h": 500, "caption": "front"},
+        {"x": 100, "y": 500, "w": 600, "h": 400, "id": "back"},
+        {"x": 500, "y": 400, "w": 700, "h": 500, "id": "front"},
     ])
-    tops = sorted((p.x0, p.x1, p.caption) for p in dO.platforms if not p.floor)
+    tops = sorted((p.x0, p.x1, p.win_id) for p in dO.platforms if not p.floor)
     # 'back' is only jumpable on its visible edge (100..500); 'front' is full
     assert (100.0, 500.0, "back") in tops, tops
     assert (500.0, 1200.0, "front") in tops, tops
@@ -497,7 +497,7 @@ def main() -> None:
     # wall: the cat walks right, foreground window at x=600 -> never stands
     # on the floor INSIDE the wall's span (jumping ONTO the window is legal)
     dW = DesktopState(1920, 1080)
-    dW.set_windows([{"x": 600, "y": 600, "w": 500, "h": 480, "caption": "wall"}])
+    dW.set_windows([{"x": 600, "y": 600, "w": 500, "h": 480, "id": "wall"}])
     catW2 = Cat(500, 1080, rng=random.Random(81))
     catW2.tick(DT, dW)  # resolve floor
     catW2.body.walk_to(1000.0, 230.0)
@@ -804,10 +804,10 @@ def main() -> None:
     assert body.target_x is None and abs(body.x - 700.0) < 2.0
     # jump anticipation (prep) + landing absorb (land)
     dA3 = DesktopState(1920, 1080)
-    dA3.set_windows([{"x": 700, "y": 500, "w": 500, "h": 400, "caption": "Hop"}])
+    dA3.set_windows([{"x": 700, "y": 500, "w": 500, "h": 400, "id": "Hop"}])
     catA3 = Cat(800, 1080, rng=random.Random(302))
     catA3.tick(DT, dA3)
-    catA3.brain.hop_target = next(p for p in dA3.platforms if p.caption == "Hop")
+    catA3.brain.hop_target = next(p for p in dA3.platforms if p.win_id == "Hop")
     catA3.brain._try_jump_up(catA3.body)
     assert catA3.brain.state == "prep_jump", catA3.brain.state
     seenA: set[str] = set()
@@ -923,14 +923,14 @@ def main() -> None:
     # hop targets are filtered by the dwell level
     catL3 = Cat(500, 1080, rng=random.Random(403))
     dL3 = DesktopState(1920, 1080)
-    dL3.set_windows([{"x": 700, "y": 500, "w": 500, "h": 400, "caption": "Win"}])
+    dL3.set_windows([{"x": 700, "y": 500, "w": 500, "h": 400, "id": "Win"}])
     dL3.set_extra_platforms([_P(1300, 1400, 900, "Katzenbaum")])
     catL3.tick(DT, dL3)
     catL3.brain._level = "front"
     catL3.brain._level_t = 5.0
     catL3.brain._start_hop(catL3.body, dL3)
     assert catL3.brain.hop_target is None or \
-        catL3.brain.hop_target.caption == "Win", catL3.brain.hop_target
+        catL3.brain.hop_target.win_id == "Win", catL3.brain.hop_target
     # a committed behavior can't flip mid-dwell: redirect instead
     catL4 = Cat(500, 1080, rng=random.Random(404))
     catL4.brain.food_x = 110.0

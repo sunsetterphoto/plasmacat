@@ -548,7 +548,7 @@ class Brain:
             return
         cx, _cy = desktop.cursor
         offset = 55 * (-1 if cx < body.x else 1)
-        plat = desktop.platform_below(cx, desktop.screen_h)
+        plat = desktop.floor_under(cx)
         dest = min(max(cx + offset, plat.x0 + 90), plat.x1 - 90)
         body.walk_to(dest, RUN_SPEED)
         self._force_level_ready()  # the human is back: greet them up front
@@ -1088,7 +1088,7 @@ class Brain:
     def _chase_step(self, body: CatBody, desktop: DesktopState) -> None:
         cx, _cy = desktop.cursor
         offset = 70 * (-1 if cx < body.x else 1)
-        plat = desktop.platform_below(cx, desktop.screen_h)
+        plat = desktop.floor_under(cx)
         lo, hi = self._walk_range(plat)
         dest = min(max(cx + offset, lo), hi)
         # hysteresis: don't re-step for small corrections (anti flip-flop)
@@ -1100,7 +1100,7 @@ class Brain:
     def _start_cuddle(self, body: CatBody, desktop: DesktopState) -> None:
         cx, _cy = desktop.cursor
         offset = 55 * (-1 if cx < body.x else 1)
-        plat = desktop.platform_below(cx, desktop.screen_h)
+        plat = desktop.floor_under(cx)
         lo, hi = self._walk_range(plat)
         dest = min(max(cx + offset, lo), hi)
         if abs(dest - body.x) > 30:
@@ -1206,7 +1206,7 @@ class Brain:
                     self.state_left = self.rng.uniform(120, 7200)
                     self.log.append(f"napping on the {plat.caption}")
                 else:
-                    floor = next(p for p in desktop.platforms if p.floor)
+                    floor = desktop.floor_under(body.x)
                     hop_x = min(max(body.x + self.rng.uniform(-140, 140),
                                     floor.x0 + 70), floor.x1 - 70)
                     # short crouch, then the drop (resolved in prep_jump)
@@ -1254,7 +1254,7 @@ class Brain:
                 self._fx_t = 0.8
             if self.state_left <= 0:
                 # the puddle lands on the floor below (gravity applies)
-                floor = next(p for p in desktop.platforms if p.floor)
+                floor = desktop.floor_under(body.x)
                 px = min(max(body.x, floor.x0 + 40), floor.x1 - 40)
                 self.puke_spots.append(px)
                 del self.puke_spots[:-3]  # cap the mess
@@ -1286,13 +1286,13 @@ class Brain:
             if (desktop.cursor_active and abs(cx - body.x) < 350
                     and self.rng.random() < 0.5 * dt):
                 # AMBUSH: burst out of the box at the 'prey'
-                plat = desktop.platform_below(cx, desktop.screen_h)
+                plat = desktop.floor_under(cx)
                 tx = min(max(cx, plat.x0 + 90), plat.x1 - 90)
                 self._wiggle_then = ("hunt", tx, plat.y)
                 self.state = "wiggle"
                 self.state_left = 0.5
             elif self.state_left <= 0:
-                floor = next(p for p in desktop.platforms if p.floor)
+                floor = desktop.floor_under(body.x)
                 hop_x = min(max(body.x + self.rng.uniform(-160, 160),
                                 floor.x0 + 70), floor.x1 - 70)
                 if body.jump_to(hop_x, floor.y):
@@ -1629,7 +1629,7 @@ class Brain:
             self._fx_t -= dt
             if self._fx_t <= 0:
                 self._fx_t = self.rng.uniform(0.5, 1.0)
-                floor = next(p for p in desktop.platforms if p.floor)
+                floor = desktop.floor_under(body.x)
                 wins = [p for p in desktop.platforms
                         if not p.floor and p.caption not in FURNITURE_CAPTIONS]
                 if self.rng.random() < 0.25 and wins:
@@ -1817,7 +1817,7 @@ class Brain:
             if self._fx_t <= 0:
                 self._fx_t = 0.7
                 if abs(dist) > 170:
-                    plat = desktop.platform_below(cx, desktop.screen_h)
+                    plat = desktop.floor_under(cx)
                     lo, hi = self._walk_range(plat)
                     dest = min(max(cx - (1 if dist > 0 else -1) * 150, lo), hi)
                     body.walk_to(dest, WALK_SPEED)
@@ -1849,7 +1849,7 @@ class Brain:
                 dist = abs(laser.x - body.x)
                 body.facing = 1 if laser.x >= body.x else -1
                 if body.target_x is None:
-                    plat = desktop.platform_below(laser.x, desktop.screen_h)
+                    plat = desktop.floor_under(laser.x)
                     if dist < 55:
                         # in striking range: wiggle, then pounce on the dot
                         tx = min(max(laser.x, plat.x0 + 90), plat.x1 - 90)
@@ -1904,7 +1904,7 @@ class Brain:
                 self._fx_t -= dt
                 if self._fx_t <= 0:
                     self._fx_t = 1.5
-                    plat = desktop.platform_below(cx, desktop.screen_h)
+                    plat = desktop.floor_under(cx)
                     lo, hi = self._walk_range(plat)
                     offset = 60 * (-1 if cx < body.x else 1)
                     body.walk_to(min(max(cx + offset, lo), hi), WALK_SPEED)
@@ -1934,7 +1934,7 @@ class Brain:
                     self.state = "idle"
                     self.state_left = 0.0
                 elif dist < 260 or desktop.cursor_speed < 150:
-                    plat = desktop.platform_below(tx, desktop.screen_h)
+                    plat = desktop.floor_under(tx)
                     if plat.floor:
                         tx = min(max(tx, plat.x0 + 90), plat.x1 - 90)
                     # butt wiggle first, then the pounce (resolved in "wiggle")
