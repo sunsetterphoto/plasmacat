@@ -2,8 +2,9 @@
 
 The KWin script (plasmacat/data/kwin/bridge.js) pushes data to us via callDBus:
   SetCursor("x,y")       -> cursorChanged(int, int)     (~30 Hz while moving)
-  SetWindows("[...]")    -> windowsChanged(list[dict])  (on any window change)
+  SetWindows("[...]")    -> windowsChanged(list[dict])  ({id,x,y,w,h}, coalesced)
   SetWorkAreas("[...]")  -> workAreasChanged(list[dict]) (one work area per screen, P38)
+  SetActiveFullscreen("1") -> fullscreenChanged(bool)   (active window is fullscreen)
   OverlayTagged("...")   -> overlayTagged(str)          (our overlay got keepAbove etc.)
   KeyEvent("left")       -> keyEvent(str)               (P42 control-mode shortcuts)
   Activate("")           -> activateRequested()         (a second launch asks us to show up)
@@ -41,6 +42,7 @@ class BridgeService(QObject):
     overlayTagged = Signal(str)
     keyEvent = Signal(str)  # P42: control-mode key from a KWin shortcut
     activateRequested = Signal()  # a second launch wants the UI shown
+    fullscreenChanged = Signal(bool)
 
     @Slot(str)
     def SetCursor(self, csv: str) -> None:
@@ -57,7 +59,9 @@ class BridgeService(QObject):
         except json.JSONDecodeError:
             return
         if isinstance(data, list):
-            self.windowsChanged.emit(data)
+            self.windowsChanged.emit([
+                w for w in data if isinstance(w, dict)
+                and all(isinstance(w.get(k), (int, float)) for k in ("x", "y", "w", "h"))])
 
     @Slot(str)
     def SetWorkAreas(self, payload: str) -> None:
@@ -69,6 +73,10 @@ class BridgeService(QObject):
                 isinstance(a, dict) and {"x", "y", "w", "h"} <= a.keys()
                 for a in data):
             self.workAreasChanged.emit(data)
+
+    @Slot(str)
+    def SetActiveFullscreen(self, flag: str) -> None:
+        self.fullscreenChanged.emit(flag.strip() == "1")
 
     @Slot(str)
     def OverlayTagged(self, caption: str) -> None:
@@ -96,6 +104,7 @@ class KWinBridge(QObject):
         self.overlayTagged = self.service.overlayTagged
         self.keyEvent = self.service.keyEvent  # P42
         self.activateRequested = self.service.activateRequested
+        self.fullscreenChanged = self.service.fullscreenChanged
         self.error: str | None = None  # 'running' | 'kwin' after a failed start()
         self._scripting = QDBusInterface(
             "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"
@@ -268,6 +277,7 @@ class FakeBridge(QObject):
     overlayTagged = Signal(str)
     keyEvent = Signal(str)
     activateRequested = Signal()
+    fullscreenChanged = Signal(bool)
 
     def __init__(self, script_path: str = "", parent: QObject | None = None) -> None:
         super().__init__(parent)

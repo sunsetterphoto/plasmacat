@@ -1,28 +1,41 @@
-// plasmacat-bridge.js — persistent KWin helper script for PlasmaCat.
+// bridge.js — persistent KWin helper script for PlasmaCat.
 // Loaded via org.kde.kwin.Scripting.loadScript(path, "plasmacat-bridge").
-// Pushes cursor position and window-top platforms to the PlasmaCat app over DBus,
-// tags the PlasmaCat overlay windows (above everything / furniture below, all
-// desktops), and positions the small front overlay via its title-encoded rect
-// ('plasmacat@x,y,w,h' -> frameGeometry; P37).
-// All DBus arguments are strings (see DECISIONS.md D3).
+//
+// Streams to the app over DBus (all arguments are strings, see ARCHITECTURE.md):
+//   SetCursor("x,y")              cursor position, ~30 Hz while moving
+//   SetWindows("[{id,x,y,w,h}]")  visible normal windows, bottom→top stacking
+//   SetWorkAreas("[{x,y,w,h}]")   one walkable area per screen, active screen first
+//   SetActiveFullscreen("0|1")    the active window is fullscreen (cat hides)
+//   OverlayTagged(caption)        one of our own windows was tagged
+//   KeyEvent("left|right|jump|stop")  control mode only
+// It also tags PlasmaCat's own windows (keep above / furniture below, all
+// desktops) and moves the small front overlay to the rect encoded in its
+// title ('plasmacat@x,y,w,h' → frameGeometry), since Wayland clients cannot
+// position themselves.
 
 const SERVICE = "org.plasmacat.Bridge";
 const OBJPATH = "/Bridge";
-// Interface name: QtDBus auto-generates it from the shiboken metaobject and it
-// is NONDETERMINISTIC (e.g. 'local.py.main.BridgeService' or
-// 'local.plasmacat.BridgeService'). bridge/kwin.py introspects the running app
-// and replaces __PLASMACAT_IFACE__ with the discovered name (see DECISIONS.md D10).
+// QtDBus generates the interface name at runtime; the app introspects itself
+// and fills this placeholder before loading the script.
 const IFACE = "__PLASMACAT_IFACE__";
-
-const CURSOR_INTERVAL_MS = 33; // ~30 Hz
-var lastCursorSent = 0;
-
-// P42 control mode: the app re-renders this script with CONTROL=true while
-// the user steers the cat, then reloads it. WASD/arrows become GLOBAL
-// shortcuts (they grab the keys system-wide — that's why they only exist
-// while the mode is on). Wayland gives overlays no keyboard focus and KWin
-// shortcuts fire no key-up, so directions are dead-man's-switch events.
+// true only while the user steers the cat: WASD/arrows become global
+// shortcuts, which grab the keys system-wide.
 const CONTROL = __CONTROL_MODE__;
+
+const CURSOR_INTERVAL_MS = 33;   // ~30 Hz
+const COALESCE_MS = 50;          // window/work-area bursts → one update
+const FLOAT_GAP_MAX = 8;         // floating panel gap when no strut tells us
+
+var lastCursorSent = 0;
+var lastFullscreen = null;
+// per-window bookkeeping keyed by internalId (QObject wrappers are not a
+// reliable place for ad-hoc JS properties)
+const watched = {};
+const tagged = {};
+
+function wid(w) {
+  return w.internalId.toString();
+}
 
 function call(method, payload) {
   callDBus(SERVICE, OBJPATH, IFACE, method, payload);
@@ -36,9 +49,32 @@ function isFurnitureWindow(w) {
   return w.caption.indexOf("plasmacat-furniture") === 0;
 }
 
-// P37: the front overlay is a SMALL window tracking the cat. Wayland clients
-// cannot self-position, so the app encodes the desired rect in its title
-// ('plasmacat@x,y,w,h') and we apply it here — frameGeometry is read-write.
+// -- coalescing ---------------------------------------------------------------
+// Dragging a window fires frameGeometryChanged every frame; the app only needs
+// the latest state, so changes are collected and flushed once per COALESCE_MS.
+
+var pendingWindows = false;
+var pendingAreas = false;
+const flushTimer = new QTimer();
+flushTimer.singleShot = true;
+flushTimer.interval = COALESCE_MS;
+flushTimer.timeout.connect(function () {
+  if (pendingWindows) { pendingWindows = false; sendWindows(); }
+  if (pendingAreas) { pendingAreas = false; sendWorkAreas(); }
+});
+
+function scheduleWindows() {
+  pendingWindows = true;
+  flushTimer.start();
+}
+
+function scheduleWorkAreas() {
+  pendingAreas = true;
+  flushTimer.start();
+}
+
+// -- our own windows ----------------------------------------------------------
+
 function applyCaptionGeometry(w) {
   if (w.fullScreen) return; // placement mode uses the whole screen
   const m = /^plasmacat@(-?\d+),(-?\d+),(\d+),(\d+)/.exec(w.caption);
@@ -51,57 +87,64 @@ function applyCaptionGeometry(w) {
 }
 
 function tagWindow(w) {
-  if (!isPlasmaCatWindow(w)) return;
+  if (tagged[wid(w)]) return;
+  tagged[wid(w)] = true;
   w.skipTaskbar = true;
   w.skipSwitcher = true;
   w.skipPager = true;
-  w.desktops = []; // on all desktops
+  w.desktops = []; // all desktops
   if (isFurnitureWindow(w)) {
-    w.keepBelow = true;   // furniture lives behind all windows (desktop level)
+    w.keepBelow = true;   // furniture lives on the desktop level
   } else {
-    w.keepAbove = true;   // the cat herself stays on top
+    w.keepAbove = true;   // the cat stays on top
     applyCaptionGeometry(w);
     w.captionChanged.connect(function () { applyCaptionGeometry(w); });
   }
   call("OverlayTagged", w.caption);
 }
 
+// -- data streams -------------------------------------------------------------
+
 function sendWindows() {
   const wins = [];
   const stack = workspace.stackingOrder;
   for (let i = 0; i < stack.length; i++) {
     const w = stack[i];
-    if (isPlasmaCatWindow(w)) continue;
-    if (!w.normalWindow) continue;
-    if (w.minimized) continue;
+    if (isPlasmaCatWindow(w) || !w.normalWindow || w.minimized) continue;
     if (w.desktops.length > 0 && w.desktops.indexOf(workspace.currentDesktop) < 0) continue;
     const g = w.frameGeometry;
     wins.push({
+      id: wid(w),
       x: Math.round(g.x),
       y: Math.round(g.y),
       w: Math.round(g.width),
       h: Math.round(g.height),
-      caption: w.caption,
     });
   }
   call("SetWindows", JSON.stringify(wins));
 }
 
+// The walkable floor of a screen: the work area's bottom, or the VISUAL top
+// of a panel floating over it. A floating panel's frame includes its float
+// gap, so its visible top lies `margin` px below the frame top:
+//  - with a strut (Plasma 6.7, measured: frame 62, strut 46) the strut is
+//    centred in the frame → margin = (h - reserved) / 2 = 8
+//  - without a strut (Plasma 6.8, measured: frame 60, area = full screen,
+//    visible panel 44) the gap must be assumed → margin = min(8, h / 4)
+//  - a docked panel has frame == strut → margin 0
+function visualFloor(areaBottom, reserved, dock) {
+  const margin = reserved > 0 ? Math.max(0, (dock.height - reserved) / 2)
+                              : Math.min(FLOAT_GAP_MAX, dock.height / 4);
+  return Math.min(areaBottom, dock.y + margin);
+}
+
 function sendWorkAreas() {
-  // one work area per screen (P38); the active screen first, so the app's
-  // 'primary' area semantics stay stable
   const outs = workspace.screens || [];
   const ordered = [];
   if (workspace.activeScreen) ordered.push(workspace.activeScreen);
   for (let i = 0; i < outs.length; i++) {
     if (outs[i] !== workspace.activeScreen) ordered.push(outs[i]);
   }
-  // P43: a FLOATING panel (dock) intrudes into the clientArea — measured:
-  // area bottom 1021 vs panel top 1005. And its frameGeometry includes a
-  // float margin/shadow: the panel's VISUAL top is ~8 px lower (measured:
-  // visual top 1013, bottom gap 8 — the panel's 46 px strut is centered in
-  // its 62 px surface). The world floor must sit on the visual top, or the
-  // furniture hides behind the panel / floats above it.
   const docks = [];
   const stack = workspace.stackingOrder;
   for (let i = 0; i < stack.length; i++) {
@@ -109,27 +152,31 @@ function sendWorkAreas() {
   }
   const areas = [];
   for (let i = 0; i < ordered.length; i++) {
-    const a = workspace.clientArea(KWin.WorkArea, ordered[i],
-                                   workspace.currentDesktop);
-    const fa = workspace.clientArea(KWin.FullScreenArea, ordered[i],
-                                    workspace.currentDesktop);
-    const reserved = (fa.y + fa.height) - (a.y + a.height);  // bottom strut
-    let bottom = a.y + a.height;
+    const a = workspace.clientArea(KWin.WorkArea, ordered[i], workspace.currentDesktop);
+    const fa = workspace.clientArea(KWin.FullScreenArea, ordered[i], workspace.currentDesktop);
+    const areaBottom = a.y + a.height;
+    const reserved = Math.max(0, (fa.y + fa.height) - areaBottom);  // bottom strut
+    let bottom = areaBottom;
     for (let d = 0; d < docks.length; d++) {
       const dg = docks[d];
       const hOverlap = dg.x < a.x + a.width && dg.x + dg.width > a.x;
-      // the panel's visual rect: its strut is centered in the surface
-      const margin = Math.max(0, (dg.height - reserved) / 2);
-      const visualTop = dg.y + margin;
-      // a bottom-edge dock whose visual top crosses the area bottom floats over it
-      if (hOverlap && visualTop < bottom && dg.y + dg.height >= bottom - 4) {
-        bottom = Math.min(bottom, visualTop);
+      const atBottom = dg.y + dg.height >= areaBottom - 4;
+      if (hOverlap && atBottom && dg.y < areaBottom) {
+        bottom = Math.min(bottom, visualFloor(areaBottom, reserved, dg));
       }
     }
-    areas.push({x: Math.round(a.x), y: Math.round(a.y),
-                w: Math.round(a.width), h: Math.round(bottom - a.y)});
+    areas.push({ x: Math.round(a.x), y: Math.round(a.y),
+                 w: Math.round(a.width), h: Math.round(bottom - a.y) });
   }
   call("SetWorkAreas", JSON.stringify(areas));
+}
+
+function sendFullscreen() {
+  const w = workspace.activeWindow;
+  const fs = !!(w && !isPlasmaCatWindow(w) && w.fullScreen);
+  if (fs === lastFullscreen) return;
+  lastFullscreen = fs;
+  call("SetActiveFullscreen", fs ? "1" : "0");
 }
 
 function onCursor() {
@@ -140,39 +187,64 @@ function onCursor() {
   call("SetCursor", Math.round(p.x) + "," + Math.round(p.y));
 }
 
+// -- window watching ----------------------------------------------------------
+// The class is checked when a signal FIRES, not when the window appears: a
+// window may be announced before its app id is known, and our own (moving)
+// overlay must never trigger updates.
+
 function watchWindow(w) {
-  if (isPlasmaCatWindow(w)) {
-    tagWindow(w);
-    return;
+  if (watched[wid(w)]) return;
+  watched[wid(w)] = true;
+  if (isPlasmaCatWindow(w)) tagWindow(w);
+  w.windowClassChanged.connect(function () {
+    if (isPlasmaCatWindow(w)) tagWindow(w);
+    scheduleWindows();
+  });
+  w.frameGeometryChanged.connect(function () {
+    if (isPlasmaCatWindow(w)) return;
+    if (w.dock) scheduleWorkAreas();   // panels move the floor
+    else scheduleWindows();
+  });
+  w.minimizedChanged.connect(function () {
+    if (!isPlasmaCatWindow(w)) scheduleWindows();
+  });
+  w.stackingOrderChanged.connect(function () {
+    if (!isPlasmaCatWindow(w)) scheduleWindows();
+  });
+  w.fullScreenChanged.connect(function () {
+    if (!isPlasmaCatWindow(w)) sendFullscreen();
+  });
+  if (!isPlasmaCatWindow(w)) {
+    scheduleWindows();
+    if (w.dock) scheduleWorkAreas();
   }
-  w.frameGeometryChanged.connect(sendWindows);
-  w.frameGeometryChanged.connect(sendWorkAreas); // panel/strut changes too
-  w.minimizedChanged.connect(sendWindows);
-  w.stackingOrderChanged.connect(sendWindows);
-  sendWindows();
 }
 
-// Tag already-open windows (in case we load after the overlay appeared) and watch them.
 const existing = workspace.stackingOrder;
-for (let i = 0; i < existing.length; i++) {
-  watchWindow(existing[i]);
-}
+for (let i = 0; i < existing.length; i++) watchWindow(existing[i]);
 
 workspace.windowAdded.connect(watchWindow);
-workspace.windowRemoved.connect(sendWindows);
-workspace.currentDesktopChanged.connect(sendWindows);
-workspace.currentDesktopChanged.connect(sendWorkAreas);
-workspace.currentActivityChanged.connect(sendWorkAreas);
-workspace.desktopsChanged.connect(sendWorkAreas);
-workspace.desktopLayoutChanged.connect(sendWorkAreas);
-workspace.screensChanged.connect(sendWorkAreas);
-workspace.virtualScreenGeometryChanged.connect(sendWorkAreas);
+workspace.windowRemoved.connect(function (w) {
+  if (w) { delete watched[wid(w)]; delete tagged[wid(w)]; }
+  scheduleWindows();
+  if (w && w.dock) scheduleWorkAreas();
+});
+workspace.windowActivated.connect(sendFullscreen);
+workspace.currentDesktopChanged.connect(scheduleWindows);
+workspace.currentDesktopChanged.connect(scheduleWorkAreas);
+workspace.currentActivityChanged.connect(scheduleWorkAreas);
+workspace.desktopsChanged.connect(scheduleWorkAreas);
+workspace.desktopLayoutChanged.connect(scheduleWorkAreas);
+workspace.screensChanged.connect(scheduleWorkAreas);
+workspace.virtualScreenGeometryChanged.connect(scheduleWorkAreas);
 workspace.cursorPosChanged.connect(onCursor);
 
 sendWindows();
 sendWorkAreas();
+sendFullscreen();
 
-// P42: register the control keys only in control mode (see CONTROL above)
+// -- control mode -------------------------------------------------------------
+
 function reg(name, key, payload) {
   registerShortcut("plasmacat-" + name, "PlasmaCat control: " + name, key,
                    function () { call("KeyEvent", payload); });
