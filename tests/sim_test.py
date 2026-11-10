@@ -25,6 +25,11 @@ class _FixedTime:
 
 
 _brain_mod.time = _FixedTime()
+try:  # circadian() moved to cat/needs.py (0.2)
+    import plasmacat.cat.needs as _needs_mod
+    _needs_mod.time = _FixedTime()
+except ImportError:
+    pass
 
 
 def main() -> None:
