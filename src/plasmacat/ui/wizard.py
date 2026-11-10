@@ -166,7 +166,7 @@ class SetupWizard(QDialog):
 
     def _refresh_preview(self) -> None:
         bank = SpriteBank(palette=self.cust.to_palette(), pattern=self.cust.pattern,
-                          scale=PREVIEW_SCALE, accessory=self.cust.collar is not None)
+                          device_px=PREVIEW_SCALE, accessory=self.cust.collar is not None)
         pm = bank.frame("walk", self._frame)
         acc = bank.accessory_frame("walk", self._frame)
         if acc is not None:

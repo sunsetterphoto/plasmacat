@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt
 
+from plasmacat.cat.render import lh, lw
+
 from plasmacat.world.status_board import STATUS_H, STATUS_W
 
 
@@ -91,5 +93,5 @@ class PlacementMixin:
                          STATUS_W, STATUS_H)
         key = {"water_fountain": "fountain_0"}.get(self._placing, self._placing)
         pm = self._props[key]
-        return QRect(cx - pm.width() // 2, cy - pm.height() // 2,
-                     pm.width(), pm.height())
+        return QRect(cx - lw(pm) // 2, cy - lh(pm) // 2,
+                     lw(pm), lh(pm))

@@ -63,7 +63,7 @@ def render_icon(size: int, bank: SpriteBank) -> QImage:
 
 def main() -> None:
     app = QApplication([])
-    bank = SpriteBank(scale=8, facing="right")  # big source, crisp downscale
+    bank = SpriteBank(device_px=8, facing="right")  # big source, crisp downscale
     OUT.mkdir(parents=True, exist_ok=True)
     for size in SIZES:
         img = render_icon(size, bank)

@@ -237,7 +237,7 @@ def run(argv: list[str]) -> int:
 
     # -- tray -----------------------------------------------------------------
     def tray_icon(c: Customization) -> QIcon:
-        bank = SpriteBank(palette=c.to_palette(), pattern=c.pattern, scale=1,
+        bank = SpriteBank(palette=c.to_palette(), pattern=c.pattern, device_px=1,
                           accessory=c.collar is not None,
                           stage=overlay.cat.brain.stage)
         return QIcon(bank.frame("sit", 0))

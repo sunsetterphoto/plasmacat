@@ -9,6 +9,8 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
+from plasmacat.cat.render import lh, lw
+
 if TYPE_CHECKING:
     from plasmacat.world.overlay import Overlay
 
@@ -77,8 +79,8 @@ class FurnitureLayer(QWidget):
                         or abs(toy.x) > 10000 or abs(toy.y) > 10000:
                     continue
                 pm = o._props[toy.kind]
-                tr = QRect(int(toy.x) - pm.width() // 2,
-                           int(toy.y) - pm.height(), pm.width(), pm.height())
+                tr = QRect(int(toy.x) - lw(pm) // 2,
+                           int(toy.y) - lh(pm), lw(pm), lh(pm))
                 if region.intersects(tr):
                     p.drawPixmap(tr.x(), tr.y(), pm)
             # 2. exercise wheel: static stand, then rim rotating around the axle —

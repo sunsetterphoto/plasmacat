@@ -29,7 +29,7 @@ from plasmacat.cat.household import Household
 from plasmacat.cat.cat import Cat
 from plasmacat.cat.interactions import CursorTracker, InteractionDetector
 from plasmacat.cat.minigames import MouseHunt
-from plasmacat.cat.render import SpriteBank, prop_pixmap
+from plasmacat.cat.render import SpriteBank, art_pixel_device, lh, lw, prop_pixmap
 from plasmacat.cat.toys import ToyManager
 from plasmacat.persist import Customization
 from plasmacat.world.furniture_layer import FurnitureLayer
@@ -37,9 +37,20 @@ from plasmacat.world.placement import PlacementMixin
 from plasmacat.world.status_board import STATUS_H, STATUS_W, StatusBoardMixin
 from plasmacat.world.window_policy import WIN_MIN_H, WIN_MIN_W, WindowPolicyMixin  # noqa: F401
 
-SCALE_MIN = 2
 FPS_MS = 16
 MAX_CATS = 4  # P47: household size cap (each cat costs a brain + a sprite bank)
+
+# every prop pixmap the layers draw (rebuilt per device pixel ratio)
+PROP_NAMES = ("food_bowl", "food_bowl_empty",
+                 "fountain_0", "fountain_1", "fountain_2",
+                 "puke", "wall_shelf", "box", "box_front",
+                 "cat_door_0", "cat_door_1", "cat_door_2",
+                 "fish", "drop", "zzz", "heart",
+                 "ball", "plush", "mouse", "lure", "laser_dot",
+                 "scratch_post", "cat_bed",
+                 "cat_grass", "litter_0", "litter_1", "litter_2",
+                 "litter_poop", "litter_pee",
+                 "cat_tree", "wheel_stand", "wheel_rim", "wheel_front")
 
 
 DOOR_DUR = 0.9  # seconds for the cat-door transition flourish (P27)
@@ -65,10 +76,15 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
             scr = QGuiApplication.primaryScreen()
             print(f"[dbg] Qt screen geometry={screen.width()}x{screen.height()} "
                   f"dpr={scr.devicePixelRatio()} virtual={scr.virtualGeometry().getRect()}")
-        # pixel size adapts to screen width (2x at 1920px, 3x at 2560px);
-        # sprite canvas is 64x48, so scale 2 == 128x96 px cat
-        self.scale = max(SCALE_MIN, min(3, screen.width() // 850))
-        self.prop_scale = max(3, self.scale - 1)
+        # pixel-exact sizes (render.art_pixel_device): wide screens get 1.5x
+        # bigger art; the real sizes are set by _apply_dpr() below and again
+        # whenever the window's device pixel ratio changes
+        self.pixel_size = "normal"
+        self._size_factor = 1.5 if screen.width() >= 2550 else 1.0
+        self._dpr = 0.0
+        self.device_px = self.prop_device_px = 1
+        self.scale = self.prop_scale = 1.0   # logical px per art pixel
+        self._props: dict = {}
         self.cust = cust or Customization()
         self.player = player
         self.debug = debug
@@ -83,23 +99,11 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self._prev_brain_state: dict[Cat, str] = {}
         self._active: Cat | None = None  # the cat the cursor is 'with'
         self._control_on = False         # P42 control-mode toggle state
+        self._apply_dpr(self.devicePixelRatioF())
         primary = self.add_cat(self.cust, age=6.0)
         primary.brain.food_x = self.desktop.floor_x0 + 110.0
         primary.brain.water_x = self.desktop.floor_x0 + 200.0
 
-        self._props = {
-            name: prop_pixmap(name, self.prop_scale)
-            for name in ("food_bowl", "food_bowl_empty",
-                         "fountain_0", "fountain_1", "fountain_2",
-                         "puke", "wall_shelf", "box", "box_front",
-                         "cat_door_0", "cat_door_1", "cat_door_2",
-                         "fish", "drop", "zzz", "heart",
-                         "ball", "plush", "mouse", "lure", "laser_dot",
-                         "scratch_post", "cat_bed",
-                         "cat_grass", "litter_0", "litter_1", "litter_2",
-                         "litter_poop", "litter_pee",
-                         "cat_tree", "wheel_stand", "wheel_rim", "wheel_front")
-        }
         self._wheel_angle = 0.0
         self._time = 0.0
         self._dbg_t = 0.0
@@ -176,7 +180,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         # P48: the cats know each other (cuddle, chase, spats, co-sleeping)
         for c in self.cats:
             c.brain.peers = [(o.body, o.brain) for o in self.cats if o is not c]
-        br, bl = self._make_banks(cust, self.scale, cat.brain.stage)
+        br, bl = self._make_banks(cust, cat.brain.stage)
         self._banks[cat] = (br, bl, cat.brain.stage)
         return cat
 
@@ -196,7 +200,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         (the stage drives the sprite proportions, P47)."""
         br, bl, st = self._banks[cat]
         if st != cat.brain.stage:
-            br, bl = self._make_banks(cat.cust, self.scale, cat.brain.stage)
+            br, bl = self._make_banks(cat.cust, cat.brain.stage)
             self._banks[cat] = (br, bl, cat.brain.stage)
         return br, bl
 
@@ -220,13 +224,42 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
 
     # -- customization ---------------------------------------------------------
 
-    @staticmethod
-    def _make_banks(cust: Customization, scale: int = SCALE_MIN,
+    def _make_banks(self, cust: Customization,
                     stage: int = 6) -> tuple[SpriteBank, SpriteBank]:
-        kwargs = dict(palette=cust.to_palette(), pattern=cust.pattern, scale=scale,
+        kwargs = dict(palette=cust.to_palette(), pattern=cust.pattern,
+                      device_px=self.device_px, dpr=self._dpr,
                       accessory=cust.collar is not None, stage=stage)
         return (SpriteBank(facing="right", **kwargs),
                 SpriteBank(facing="left", **kwargs))
+
+    def _apply_dpr(self, dpr: float) -> None:
+        """(Re)build every pixmap for this device pixel ratio so each art
+        pixel is a whole number of device pixels (no compositor resampling)."""
+        dpr = dpr or 1.0
+        if abs(dpr - self._dpr) < 1e-3 and self._props:
+            return
+        self._dpr = dpr
+        self.device_px = art_pixel_device(dpr, self.pixel_size, self._size_factor)
+        self.prop_device_px = art_pixel_device(dpr, self.pixel_size,
+                                               1.5 * self._size_factor)
+        self.scale = self.device_px / dpr
+        self.prop_scale = self.prop_device_px / dpr
+        self._props = {name: prop_pixmap(name, self.prop_device_px, dpr)
+                       for name in PROP_NAMES}
+        for cat in self.cats:
+            br, bl = self._make_banks(cat.cust, cat.brain.stage)
+            self._banks[cat] = (br, bl, cat.brain.stage)
+        if self.cats:
+            self._sync_furniture_platforms()
+        for layer in getattr(self, "furniture_layers", []):
+            layer.refresh()
+        self.update()
+
+    def set_pixel_size(self, preference: str) -> None:
+        """'fine' | 'normal' | 'chunky' (System tab)."""
+        self.pixel_size = preference
+        self._dpr = 0.0  # force a rebuild
+        self._apply_dpr(self.devicePixelRatioF())
 
     def set_customization(self, cust: Customization) -> None:
         """Re-skin the ACTIVE cat live (from the tray 'Customize...' action)."""
@@ -234,7 +267,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         cat.cust = cust
         if cat is self.cats[0]:
             self.cust = cust
-        br, bl = self._make_banks(cust, self.scale, cat.brain.stage)
+        br, bl = self._make_banks(cust, cat.brain.stage)
         self._banks[cat] = (br, bl, cat.brain.stage)
         self.update()
 
@@ -372,8 +405,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
     def _cat_rect(self, cat: Cat) -> QRect:
         bank_r, _bank_l = self._banks_for(cat)
         pm = bank_r.frame(self._anim_key(cat), 0)
-        return QRect(int(cat.body.x) - pm.width() // 2,
-                     int(cat.body.y) - pm.height(), pm.width(), pm.height())
+        return QRect(int(cat.body.x) - lw(pm) // 2,
+                     int(cat.body.y) - lh(pm), lw(pm), lh(pm))
 
     def _bubble_rect(self, cat: Cat) -> QRect:
         if not cat.brain.bubble:
@@ -381,14 +414,14 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         pm = self._props[cat.brain.bubble]
         cr = self._cat_rect(cat)
         bob = int(2.5 * math.sin(self._time * 3.0))
-        return QRect(cr.center().x() - pm.width() // 2,
-                     cr.top() - pm.height() - 6 + bob, pm.width(), pm.height())
+        return QRect(cr.center().x() - lw(pm) // 2,
+                     cr.top() - lh(pm) - 6 + bob, lw(pm), lh(pm))
 
     def _bowl_rect(self, x: float, name: str) -> QRect:
         pm = self._props[name]
-        return QRect(int(x) - pm.width() // 2,
-                     int(self.desktop.floor_y_at(x)) - pm.height(),
-                     pm.width(), pm.height())
+        return QRect(int(x) - lw(pm) // 2,
+                     int(self.desktop.floor_y_at(x)) - lh(pm),
+                     lw(pm), lh(pm))
 
     def _floor_props(self) -> list[tuple[float, str]]:
         """All static floor items: bowls (fill-aware) + P9/P25 furniture."""
@@ -421,20 +454,20 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
 
     def _wheel_rect(self) -> QRect:
         pm = self._props["wheel_stand"]
-        return QRect(int(self.cat.brain.wheel_x) - pm.width() // 2,
-                     int(self.desktop.floor_y_at(self.cat.brain.wheel_x)) - pm.height(),
-                     pm.width(), pm.height())
+        return QRect(int(self.cat.brain.wheel_x) - lw(pm) // 2,
+                     int(self.desktop.floor_y_at(self.cat.brain.wheel_x)) - lh(pm),
+                     lw(pm), lh(pm))
 
     def _box_rect(self) -> QRect:
         pm = self._props["box"]
-        return QRect(int(self.cat.brain.box_x) - pm.width() // 2,
-                     int(self.desktop.floor_y_at(self.cat.brain.box_x)) - pm.height(),
-                     pm.width(), pm.height())
+        return QRect(int(self.cat.brain.box_x) - lw(pm) // 2,
+                     int(self.desktop.floor_y_at(self.cat.brain.box_x)) - lh(pm),
+                     lw(pm), lh(pm))
 
     def _shelf_rects(self) -> list[QRect]:
         """Screen rects of the floating wall shelves (P25)."""
         pm = self._props["wall_shelf"]
-        return [QRect(int(x) - pm.width() // 2, int(y), pm.width(), pm.height())
+        return [QRect(int(x) - lw(pm) // 2, int(y), lw(pm), lh(pm))
                 for x, y in self.cat.brain.shelves]
 
     def _fountain_rect(self) -> QRect:
@@ -454,9 +487,9 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
             pm = self._props["litter_poop" if kind == "poop" else "litter_pee"]
             ox = ((i * 23) % 57) - 28          # -28..+28 across the tray
             oy = 10 + ((i * 7) % 8)            # slight depth variation
-            out.append((QRect(br.center().x() + ox - pm.width() // 2,
-                              br.bottom() - oy - pm.height(),
-                              pm.width(), pm.height()), kind))
+            out.append((QRect(br.center().x() + ox - lw(pm) // 2,
+                              br.bottom() - oy - lh(pm),
+                              lw(pm), lh(pm)), kind))
         return out
 
     def _door_rect(self, cat: Cat) -> QRect:
@@ -464,8 +497,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         if d is None:
             return QRect()
         pm = self._props["cat_door_0"]
-        return QRect(int(d[0]) - pm.width() // 2,
-                     int(d[1]) - pm.height(), pm.width(), pm.height())
+        return QRect(int(d[0]) - lw(pm) // 2,
+                     int(d[1]) - lh(pm), lw(pm), lh(pm))
 
     @staticmethod
     def _toy_front(toy) -> bool:
@@ -492,13 +525,13 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                              else "laser_dot" if toy.kind == "laser"
                              else toy.kind]
             if toy.kind in ("string", "laser"):  # center-aligned
-                rects.append(QRect(int(toy.x) - pm.width() // 2,
-                                   int(toy.y) - pm.height() // 2,
-                                   pm.width(), pm.height()))
+                rects.append(QRect(int(toy.x) - lw(pm) // 2,
+                                   int(toy.y) - lh(pm) // 2,
+                                   lw(pm), lh(pm)))
             else:
-                rects.append(QRect(int(toy.x) - pm.width() // 2,
-                                   int(toy.y) - pm.height(),
-                                   pm.width(), pm.height()))
+                rects.append(QRect(int(toy.x) - lw(pm) // 2,
+                                   int(toy.y) - lh(pm),
+                                   lw(pm), lh(pm)))
             if toy.kind == "string":
                 ax, ay = toy.anchor
                 rects.append(QRect(int(min(ax, toy.x)) - 4, int(min(ay, toy.y)) - 4,
@@ -535,6 +568,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         if dt <= 0.0:
             return  # zero-length frame (same-millisecond reentry): nothing to do
         self._time += dt
+        # the front window may have moved to a screen with another scale
+        self._apply_dpr(self.devicePixelRatioF())
         old_front, old_back = self._layer_regions()
 
         if self._placing and self._time - self._place_since > 30.0:
@@ -937,16 +972,16 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                     p.setPen(QPen(QColor(240, 210, 90, 220), 2))
                     p.drawLine(int(ax), int(ay), int(toy.x), int(toy.y))
                     pm = self._props["lure"]
-                    p.drawPixmap(int(toy.x) - pm.width() // 2,
-                                 int(toy.y) - pm.height() // 2, pm)
+                    p.drawPixmap(int(toy.x) - lw(pm) // 2,
+                                 int(toy.y) - lh(pm) // 2, pm)
                 elif toy.kind == "laser":
                     pm = self._props["laser_dot"]
-                    p.drawPixmap(int(toy.x) - pm.width() // 2,
-                                 int(toy.y) - pm.height() // 2, pm)
+                    p.drawPixmap(int(toy.x) - lw(pm) // 2,
+                                 int(toy.y) - lh(pm) // 2, pm)
                 else:
                     pm = self._props[toy.kind]
-                    p.drawPixmap(int(toy.x) - pm.width() // 2,
-                                 int(toy.y) - pm.height(), pm)
+                    p.drawPixmap(int(toy.x) - lw(pm) // 2,
+                                 int(toy.y) - lh(pm), pm)
             # thought bubbles are drawn with their cats above (front level)
             # the cat doors (P27): a flapping portal at the crossing point
             for cat, d in self._doors.items():
@@ -956,7 +991,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                 frame = ("cat_door_0", "cat_door_1", "cat_door_2",
                          "cat_door_2", "cat_door_1")[min(int(ph * 5), 4)]
                 pm = self._props[frame]
-                p.drawPixmap(int(d[0]) - pm.width() // 2, int(d[1]) - pm.height(), pm)
+                p.drawPixmap(int(d[0]) - lw(pm) // 2, int(d[1]) - lh(pm), pm)
             # placement ghost + hint
             if self._placing:
                 gr = self._ghost_rect()
