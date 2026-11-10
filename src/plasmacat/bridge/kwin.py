@@ -6,6 +6,7 @@ The KWin script (plasmacat/data/kwin/bridge.js) pushes data to us via callDBus:
   SetWorkAreas("[...]")  -> workAreasChanged(list[dict]) (one work area per screen, P38)
   OverlayTagged("...")   -> overlayTagged(str)          (our overlay got keepAbove etc.)
   KeyEvent("left")       -> keyEvent(str)               (P42 control-mode shortcuts)
+  Activate("")           -> activateRequested()         (a second launch asks us to show up)
 All DBus arguments are single strings (DECISIONS.md D3).
 
 IMPORTANT (DECISIONS.md D10): the DBus interface name QtDBus auto-generates for a
@@ -39,6 +40,7 @@ class BridgeService(QObject):
     workAreasChanged = Signal(list)
     overlayTagged = Signal(str)
     keyEvent = Signal(str)  # P42: control-mode key from a KWin shortcut
+    activateRequested = Signal()  # a second launch wants the UI shown
 
     @Slot(str)
     def SetCursor(self, csv: str) -> None:
@@ -76,6 +78,10 @@ class BridgeService(QObject):
     def KeyEvent(self, payload: str) -> None:
         self.keyEvent.emit(payload)
 
+    @Slot(str)
+    def Activate(self, _payload: str) -> None:
+        self.activateRequested.emit()
+
 
 class KWinBridge(QObject):
     """Owns the DBus service and the lifecycle of the KWin helper script."""
@@ -89,6 +95,8 @@ class KWinBridge(QObject):
         self.workAreasChanged = self.service.workAreasChanged
         self.overlayTagged = self.service.overlayTagged
         self.keyEvent = self.service.keyEvent  # P42
+        self.activateRequested = self.service.activateRequested
+        self.error: str | None = None  # 'running' | 'kwin' after a failed start()
         self._scripting = QDBusInterface(
             "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"
         )
@@ -112,14 +120,18 @@ class KWinBridge(QObject):
                 break
             QThread.msleep(300)
         if not registered:
+            self.error = "running"
             return False
         bus.registerObject(
             OBJPATH, self.service, QDBusConnection.RegisterOption.ExportAllSlots
         )
         script = self._render_script(bus)
         if script is None:
+            self.error = "kwin"
             return False
         self._loaded = self._load_script(script)
+        if not self._loaded:
+            self.error = "kwin"
         return self._loaded
 
     def _load_script(self, script: str) -> bool:
@@ -219,6 +231,7 @@ class KWinBridge(QObject):
         if self._loaded:
             self._scripting.call("unloadScript", SCRIPT_PLUGIN)
             self._loaded = False
+            print("[bridge] bridge unloaded")
 
     def start_watchdog(self, parent: QObject) -> None:
         """Reload the bridge script if KWin/Plasma restarts (the script dies
@@ -242,3 +255,52 @@ def unload_bridge() -> None:
     scripting = QDBusInterface("org.kde.KWin", "/Scripting",
                                "org.kde.kwin.Scripting")
     scripting.call("unloadScript", SCRIPT_PLUGIN)
+
+
+class FakeBridge(QObject):
+    """Test-only stand-in (PLASMACAT_FAKE_BRIDGE=1): same signals and
+    lifecycle as KWinBridge, no DBus and no KWin. Lets the whole app run
+    headless in tests."""
+
+    cursorChanged = Signal(int, int)
+    windowsChanged = Signal(list)
+    workAreasChanged = Signal(list)
+    overlayTagged = Signal(str)
+    keyEvent = Signal(str)
+    activateRequested = Signal()
+
+    def __init__(self, script_path: str = "", parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._loaded = False
+        self.error: str | None = None
+
+    def start(self) -> bool:
+        self._loaded = True
+        self.workAreasChanged.emit([{"x": 0, "y": 0, "w": 1920, "h": 1040}])
+        return True
+
+    def start_watchdog(self, parent: QObject) -> None:
+        pass
+
+    def set_control_mode(self, on: bool) -> None:
+        pass
+
+    def stop(self) -> None:
+        if self._loaded:
+            self._loaded = False
+            print("[bridge] bridge unloaded")
+
+
+def activate_running_instance() -> bool:
+    """Ask an already running PlasmaCat to show itself (second launch)."""
+    iface = QDBusInterface(SERVICE, OBJPATH, "", QDBusConnection.sessionBus())
+    reply = iface.call("Activate", "")
+    return not reply.errorMessage()
+
+
+def make_bridge(script_path: str):
+    """The real KWin bridge, or the headless fake when PLASMACAT_FAKE_BRIDGE=1."""
+    import os
+    if os.environ.get("PLASMACAT_FAKE_BRIDGE") == "1":
+        return FakeBridge(script_path)
+    return KWinBridge(script_path)
