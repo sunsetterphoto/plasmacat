@@ -33,9 +33,9 @@ def test_install_release_then_uninstall_keeps_save(env):
     assert res.returncode == 0, res.stdout + res.stderr
     app = home / ".local/share/plasmacat/app"
     assert (app / "run.sh").exists()
-    tag = subprocess.run(["git", "-C", str(app), "describe", "--tags"], capture_output=True,
-                         text=True).stdout.strip()
-    assert tag == "v9.0.0"
+    tags = subprocess.run(["git", "-C", str(app), "tag", "--points-at", "HEAD"],
+                          capture_output=True, text=True).stdout.split()
+    assert "v9.0.0" in tags                    # the newest release is checked out
     desktop = (home / ".local/share/applications/plasmacat.desktop").read_text()
     assert f"Exec={app}/run.sh" in desktop
     assert (home / ".local/share/icons/hicolor/64x64/apps/plasmacat.png").exists()

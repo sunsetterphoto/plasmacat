@@ -40,8 +40,8 @@ class PlacementMixin:
         # plain title: no '@geometry' — the KWin script leaves a fullscreen
         # window alone while these modes need the whole screen (P37)
         self.setWindowTitle("plasmacat")
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, False)
         self.showFullScreen()
+        self.update_input_masks(force=True)   # the whole screen takes the click
         self.activateWindow()
         self.raise_()
         self.setFocus()
@@ -51,9 +51,9 @@ class PlacementMixin:
         self._placing = None
         self._arranging = False
         self._move_index = None
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
         self.showNormal()
         self._sync_window_geometry(force=True)  # back to the small window
+        self.update_input_masks(force=True)     # click-through again
 
     # -- arrange mode helpers ---------------------------------------------------
 
@@ -97,6 +97,10 @@ class PlacementMixin:
                 self.update()
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         if not (self._placing or self._arranging):
+            ox, oy = self._origin()
+            pos = event.position()
+            self.handle_click(pos.x() + ox, pos.y() + oy, event.button(),
+                              event.globalPosition().toPoint(), self)
             return
         if event.button() == Qt.MouseButton.RightButton:
             self._end_placement()

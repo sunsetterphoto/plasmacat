@@ -120,6 +120,7 @@ class Brain:
         self._gift_toy = None            # plush being carried to the human
         self._land_then = "idle"         # state after landing (supervise drop)
         self._lap_t = 0.0                # drinking: time to the next lap sound
+        self._toy_hops = 0               # level changes left while fetching a toy
         # P28: the visibility level is a deliberate decision with a dwell
         # time, not a per-frame derivation (no more chaotic flip-flopping)
         self._level = "front"
@@ -339,7 +340,7 @@ class Brain:
         self._gift_toy = None
         if self._wiggle_then is not None and self._wiggle_then[0] in ("toy", "laser"):
             self._wiggle_then = None  # the wiggle branch lands on idle by itself
-        if self.state in ("to_toy", "pounce_toy", "toy_watch", "to_gift",
+        if self.state in ("to_toy", "to_toy_air", "to_toy_edge", "pounce_toy", "toy_watch", "to_gift",
                           "carry_gift", "laser_chase", "laser_pounce"):
             self.state = "idle"
             self.state_left = 0.0
@@ -864,8 +865,10 @@ class Brain:
             toy = None
             if self.toys:
                 # every cat has a favorite toy (persisted personality, P26)
-                fav = [t for t in self.toys.toys if t.kind == self.fav_toy]
-                pool = fav or self.toys.toys
+                # the laser dot is its own game (laser_chase), never a "toy"
+                playable = [t for t in self.toys.toys if t.kind != "laser"]
+                fav = [t for t in playable if t.kind == self.fav_toy]
+                pool = fav or playable
                 toy = min(pool, key=lambda t: (t.x - body.x) ** 2
                           + (t.y - body.y) ** 2) if pool else None
             if toy is None:
@@ -873,10 +876,7 @@ class Brain:
                 self.state_left = 3.0
             else:
                 self._play_toy_target = toy
-                offset = 45 * (-1 if toy.x < body.x else 1)
-                body.walk_to(toy.x + offset, RUN_SPEED)
-                self.state = "to_toy"
-                self.state_left = 15.0
+                self._approach_toy(body, desktop, toy)
         elif name == "hop":
             self._start_hop(body, desktop)
         elif name == "chase":
@@ -1066,6 +1066,57 @@ class Brain:
         handler = REGISTRY.get(self.state)
         if handler is not None:
             handler(self, dt, body, desktop)
+
+    TOY_LEVEL_TOLERANCE = 60.0   # px between her feet and a toy "on her level"
+
+    def toy_on_my_level(self, body: CatBody, toy) -> bool:
+        """Resting toys must lie on her level; a string dangles from the
+        cursor and is played from wherever she stands below it."""
+        if toy.kind in ("string", "laser"):
+            return True
+        return abs(toy.y - body.y) <= self.TOY_LEVEL_TOLERANCE
+
+    def _approach_toy(self, body: CatBody, desktop: DesktopState, toy,
+                      hops_left: int = 2) -> None:
+        """Go to a toy: walk if it lies on her level, otherwise jump to the
+        toy's level first. She never 'plays' with a toy from another level
+        (a plush on the floor while she sits up on a window)."""
+        offset = 45 * (-1 if toy.x < body.x else 1)
+        if self.toy_on_my_level(body, toy):
+            plat = body.platform or desktop.platform_below(body.x, body.y)
+            lo, hi = self._walk_range(plat)
+            body.walk_to(min(max(toy.x + offset, lo), hi), RUN_SPEED)
+            self.state = "to_toy"
+            self.state_left = 15.0
+            return
+        if hops_left <= 0:
+            self._play_toy_target = None
+            self.state = "sit"
+            self.state_left = 2.0
+            return
+        plat = desktop.platform_below(toy.x, toy.y - 5)
+        tx = min(max(toy.x + offset, plat.x0 + 20), plat.x1 - 20)
+        cur = body.platform
+        if cur is not None and plat.y > cur.y and cur.x0 - 30 < tx < cur.x1 + 30:
+            # the toy lies below her own perch: she cannot drop through it,
+            # so she jumps off past the nearer edge and walks over below
+            left, right = cur.x0 - 60, cur.x1 + 60
+            options = [x for x in (left, right) if plat.x0 + 20 <= x <= plat.x1 - 20]
+            if options:
+                tx = min(options, key=lambda x: abs(x - toy.x))
+        if cur is not None and abs(tx - body.x) > 220:
+            # too far for one jump: walk to the near end of her perch first
+            edge = min(max(tx, cur.x0 + 15), cur.x1 - 15)
+            if abs(edge - body.x) > 20:
+                self._toy_hops = hops_left
+                body.walk_to(edge, RUN_SPEED)
+                self.state = "to_toy_edge"
+                self.state_left = 12.0
+                return
+        self._toy_hops = hops_left - 1
+        self._jump_then = (tx, plat.y, "to_toy_air")
+        self.state = "prep_jump"       # short crouch, then the jump
+        self.state_left = 0.18
 
     def _claimed_by_other(self, toy) -> bool:
         """Another cat is already fetching this plush as her gift."""

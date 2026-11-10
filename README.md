@@ -37,6 +37,9 @@ switched off in the System tab.
   itself only has quick actions: treat, toys, pause, sound, quit.
 - **Pet her** by moving your cursor *slowly* over her; linger at her head for
   a head rub. Fast, erratic movements make her hunt your cursor.
+- **Right-click** her for the main actions — and her bowl, toys and furniture
+  for what fits them (refill, serve tuna, clean, move, remove, toss).
+  A left click pets her.
 - Start with a **food bowl** and a **water fountain** (Control Center →
   Home), then add furniture.
 
@@ -48,7 +51,7 @@ switched off in the System tab.
 | **Play** | Ball and plush mouse, string, laser pointer, the 60-second mouse hunt, and steering a cat yourself (WASD / arrows — keys are only grabbed while this is on). |
 | **Home** | Place furniture; move or remove every piece separately — or *Arrange on the desktop*: click a piece to pick it up, Del removes it. Food shop, refill, cleaning. The optional status board behind your windows, with every row switchable. |
 | **Sound** | Volume, and each sound group on its own (voices, purring, eating & fountain, toys, alerts) with a sample button. |
-| **System** | Start at login, pixel size (fine / normal / chunky), hide the cats while a window is fullscreen, notifications per type, updates, start over. |
+| **System** | Start at login, pixel size (fine / normal / chunky), hide the cats while a window is fullscreen, dock a floating panel while PlasmaCat runs, notifications per type, updates, start over. |
 
 Every tab has its own **Reset to defaults**.
 

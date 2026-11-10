@@ -151,3 +151,51 @@ def test_hidden_cats_are_silent(ctl, monkeypatch):
     ov._tick()
     assert played == []
     assert ov.cat.brain.sounds == []          # dropped, not queued for later
+
+
+class FakeDock:
+    def __init__(self):
+        self.calls = []
+
+    def dock(self):
+        self.calls.append("dock")
+        return [2]
+
+    def restore(self):
+        self.calls.append("restore")
+        return [2]
+
+
+def test_panel_is_docked_while_running_and_restored(ctl):
+    assert ctl.settings.dock_panel is True          # default: docked while she's active
+    ctl.panel_dock = FakeDock()
+    ctl.apply_settings()
+    assert ctl.panel_dock.calls == ["dock"]
+    ctl.update_settings(dock_panel=False)
+    assert ctl.panel_dock.calls[-1] == "restore"
+    ctl.update_settings(dock_panel=True)
+    ctl.shutdown()
+    assert ctl.panel_dock.calls[-1] == "restore"
+
+
+def test_system_tab_has_the_dock_switch(cc, ctl):
+    ctl.panel_dock = FakeDock()
+    box = cc.tabs["system"].dock_panel
+    box.setChecked(False)
+    assert ctl.settings.dock_panel is False
+
+
+def test_home_tab_offers_furniture_as_picture_tiles(cc, ctl):
+    home = cc.tabs["home"]
+    assert {"cat_bed", "cat_tree", "wall_shelf", "food_bowl"} <= set(home.place_tiles)
+    tile = home.place_tiles["cat_bed"]
+    assert not tile.icon().isNull() and "bed" in tile.text().lower()
+    tile.click()
+    assert ctl.overlay._placing == "cat_bed"
+    ctl.overlay._end_placement()
+
+
+def test_play_tab_toys_have_pictures(cc):
+    play = cc.tabs["play"]
+    for key in ("ball", "plush", "string", "laser"):
+        assert not play.tiles[key].icon().isNull()

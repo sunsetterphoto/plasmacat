@@ -84,8 +84,9 @@ class CatsTab(QWidget):
         super().__init__(parent)
         self.ctl = ctl
         outer = QVBoxLayout(self)
-        outer.addWidget(hint("Pet a cat by moving the cursor slowly over her. "
-                             "Your cats live on your desktop and on top of your windows."))
+        outer.addWidget(hint("Pet a cat by moving the cursor slowly over her, or click "
+                             "her. Right-click a cat — or her bowl, toys and furniture — "
+                             "for the things you can do with it."))
         self.area = QScrollArea()
         self.area.setWidgetResizable(True)
         self.inner = QWidget()

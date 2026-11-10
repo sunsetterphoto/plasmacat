@@ -15,7 +15,7 @@ BACK_COMMITTED = frozenset({
 })
 FRONT_COMMITTED = frozenset({
     "wander", "chase", "hunt_stalk", "hunt_pounce", "to_toy", "pounce_toy",
-    "follow", "to_gift", "carry_gift", "greet", "hop_walk", "zoomies",
+    "follow", "to_gift", "carry_gift", "greet", "hop_walk", "zoomies", "to_toy_air", "to_toy_edge",
     "laser_chase", "laser_pounce", "user",
 })
 

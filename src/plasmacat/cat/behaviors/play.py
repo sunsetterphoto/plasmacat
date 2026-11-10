@@ -25,6 +25,9 @@ def to_toy(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> None
         self._play_toy_target = None
         self.state = "idle"
         self.state_left = 0.0
+    elif body.target_x is None and not self.toy_on_my_level(body, toy):
+        # it rolled or fell to another level meanwhile: follow it there
+        self._approach_toy(body, desktop, toy, self._toy_hops)
     elif body.target_x is None:
         if toy.kind == "ball":
             # batting happens via proximity (ToyManager); watch it roll
@@ -37,6 +40,31 @@ def to_toy(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> None
             self._wiggle_then = ("toy", toy.x, plat.y)
             self.state = "wiggle"
             self.state_left = 0.6
+
+
+def to_toy_edge(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> None:
+    """Walking to the end of her perch nearest the toy, then she jumps."""
+    toy = self._play_toy_target
+    if toy is None or (self.toys is not None and toy not in self.toys.toys):
+        self._play_toy_target = None
+        body.stop()
+        self.state = "idle"
+        self.state_left = 0.0
+    elif body.target_x is None:
+        self._approach_toy(body, desktop, toy, self._toy_hops)
+
+
+def to_toy_air(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> None:
+    """Jumping to the toy's level; on landing she walks over to it."""
+    if body.airborne:
+        return
+    toy = self._play_toy_target
+    if toy is None or (self.toys is not None and toy not in self.toys.toys):
+        self._play_toy_target = None
+        self.state = "idle"
+        self.state_left = 0.0
+    else:
+        self._approach_toy(body, desktop, toy, self._toy_hops)
 
 
 def wiggle(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> None:
@@ -63,12 +91,19 @@ def toy_watch(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> N
         self.state = "idle"
         self.state_left = 0.0
     else:
-        # a real cat follows the ball it batted (bat -> chase -> bat)
+        # a real cat follows the ball it batted (bat -> chase -> bat) — but
+        # only a toy on her own level; one that dropped away ends the game
         self._fx_t -= dt
         if self._fx_t <= 0:
             self._fx_t = 1.0
-            t = self.toys.nearest(body.x, body.y)
-            if t is not None and abs(t.x - body.x) > 80:
+            here = [t for t in self.toys.toys if self.toy_on_my_level(body, t)]
+            if not here:
+                body.stop()
+                self.state = "idle"
+                self.state_left = 0.0
+                return
+            t = min(here, key=lambda t: abs(t.x - body.x))
+            if abs(t.x - body.x) > 80:
                 off = 45 * (-1 if t.x < body.x else 1)
                 spd = RUN_SPEED if abs(t.x - body.x) > 250 else WALK_SPEED
                 body.walk_to(t.x + off, spd)
@@ -136,7 +171,9 @@ def laser_chase(self: Brain, dt: float, body: CatBody, desktop: DesktopState) ->
                 self.state_left = 0.5
             else:
                 lo, hi = self._walk_range(plat)
-                off = 70 * (-1 if laser.x < body.x else 1)
+                # stop INSIDE striking range (55): with the old 70 px she
+                # paced around the dot forever and never pounced
+                off = 40 * (-1 if laser.x < body.x else 1)
                 spd = RUN_SPEED if dist > 150 else WALK_SPEED
                 body.walk_to(min(max(laser.x + off, lo), hi), spd)
         if self.state_left <= 0:
@@ -248,6 +285,8 @@ def hunt_pounce(self: Brain, dt: float, body: CatBody, desktop: DesktopState) ->
 
 STATES = {
     "to_toy": to_toy,
+    "to_toy_air": to_toy_air,
+    "to_toy_edge": to_toy_edge,
     "wiggle": wiggle,
     "toy_watch": toy_watch,
     "pounce_toy": pounce_toy,

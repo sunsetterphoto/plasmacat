@@ -111,7 +111,8 @@ def test_props_and_cat_share_one_scale(overlay):
     from plasmacat.cat.render import PROP_DETAIL, logical_size
     from plasmacat.world.props import PROPS
     w, h = logical_size(overlay._props["cat_tree"])
-    assert h == pytest.approx(len(PROPS["cat_tree"]) * overlay.prop_scale, abs=1)
+    # props are authored on the fine grid: PROP_DETAIL cells per prop pixel
+    assert h == pytest.approx(len(PROPS["cat_tree"]) / PROP_DETAIL * overlay.prop_scale, abs=1)
     cw, _ = logical_size(overlay._banks_for(overlay.cat)[0].frame("sit", 0))
     # one prop pixel = 1.5 old cat pixels, exactly as the art was designed
     assert overlay.prop_scale / (cw / sprites.CANVAS_W) == pytest.approx(1.5)

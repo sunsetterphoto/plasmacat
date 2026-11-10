@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QGridLayout, QGroupBox, QPushButton, QVBoxLayout, QWidget
 
-from plasmacat.ui.tabs.common import hint
+from plasmacat.ui.tabs.common import hint, tile
 
 
 class PlayTab(QWidget):
@@ -15,26 +15,28 @@ class PlayTab(QWidget):
 
         toys = QGroupBox("Toys")
         g = QGridLayout(toys)
+        self.tiles: dict = {}
         for i, (text, kind, tip) in enumerate((
-                ("Place a ball", "ball", "Click on the desktop to drop it — she bats it around"),
-                ("Place a plush mouse", "plush", "Her favorite prey; trusted cats bring it to you"))):
-            b = QPushButton(text)
-            b.setToolTip(tip)
+                ("Ball", "ball", "Click on the desktop to drop it — she bats it around"),
+                ("Plush mouse", "plush", "Her favorite prey; trusted cats bring it to you"))):
+            b = tile(text, kind, tip)
             b.clicked.connect(lambda _c=False, k=kind: ctl.place(k))
+            self.tiles[kind] = b
             g.addWidget(b, 0, i)
-        self.string = QPushButton("Wave a string")
-        self.string.setCheckable(True)
-        self.string.setToolTip("A string dangles from your cursor")
+        self.string = tile("String", "lure", "A string dangles from your cursor", checkable=True)
         self.string.toggled.connect(ctl.toggle_string)
-        self.laser = QPushButton("Laser pointer")
-        self.laser.setCheckable(True)
-        self.laser.setToolTip("A red dot follows your cursor — she never quite catches it")
+        self.laser = tile("Laser pointer", "laser_dot",
+                          "A red dot follows your cursor — she chases and pounces it",
+                          checkable=True)
         self.laser.toggled.connect(ctl.toggle_laser)
-        g.addWidget(self.string, 1, 0)
-        g.addWidget(self.laser, 1, 1)
-        clear = QPushButton("Clear all toys")
+        self.tiles["string"], self.tiles["laser"] = self.string, self.laser
+        g.addWidget(self.string, 0, 2)
+        g.addWidget(self.laser, 0, 3)
+        clear = QPushButton("Put all toys away")
         clear.clicked.connect(self._clear)
-        g.addWidget(clear, 2, 0, 1, 2)
+        g.addWidget(clear, 1, 0, 1, 4)
+        g.addWidget(hint("Tip: right-click a toy on the desktop to toss it or put it away."),
+                    2, 0, 1, 4)
         lay.addWidget(toys)
 
         games = QGroupBox("Games")
@@ -60,6 +62,10 @@ class PlayTab(QWidget):
         self.ctl.clear_toys()
 
     def refresh(self) -> None:
-        self.control.blockSignals(True)
-        self.control.setChecked(self.ctl.overlay._control_on)
-        self.control.blockSignals(False)
+        kinds = {t.kind for t in self.ctl.overlay.toys.toys}
+        for b, on in ((self.control, self.ctl.overlay._control_on),
+                      (self.string, "string" in kinds), (self.laser, "laser" in kinds)):
+            if b.isChecked() != on:
+                b.blockSignals(True)
+                b.setChecked(on)
+                b.blockSignals(False)

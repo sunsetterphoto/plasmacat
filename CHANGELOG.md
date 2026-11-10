@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.1 — 2026-11-10
+
+### Added
+- **Docks a floating bottom panel while PlasmaCat runs** (System tab, on by
+  default): cats and furniture stand exactly on the panel edge. The panel
+  floats again when PlasmaCat quits (also after a crash, on the next start or
+  `./run.sh --unload-bridge`).
+
+- **Right-click menus**: right-click a cat for the main actions (pet, treat,
+  string, laser, steer, appearance, Control Center, pause); a left click pets
+  her. Right-click things for what fits them — the food bowl (fill level,
+  refill, serve another food, move), litter box (clean), furniture (move,
+  remove), toys (toss, move, put away), a mess (clean up), the status board.
+  Everything else stays click-through.
+- **Furniture and toys redrawn** on the fine grid: kibble bowl, domed
+  fountain, wicker bed, taped cardboard box, rope-wrapped posts with carpeted
+  platforms, wooden shelf, spoked wheel, striped ball, felt plush mouse.
+- Control Center: furniture and toys are picture tiles.
+
+### Fixed
+- **Toy play was inconsistent**: she "played" with a plush on the floor from up
+  on a window. She now goes to the toy's level first — to the end of her perch,
+  then a jump down. A ball that drops away ends the game.
+- **The laser never got pounced**: she stopped 70 px from the dot but only
+  pounced within 55 px, pacing around it forever.
+- The cat walked and sat on thin air: invisible helper windows (the XWayland
+  video bridge, any window with zero opacity) counted as platforms.
+- With a panel set to "dodge windows", the floor — cats, bowls, furniture —
+  jumped up and down whenever a window touched the panel. The floor now stays
+  on the panel line; only a true auto-hide panel leaves it at the screen edge.
+
 ## 0.2.0 — 2026-11-10
 
 A full rework: everything in one Control Center, finer art, real installs
