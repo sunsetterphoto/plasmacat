@@ -4,7 +4,7 @@
 Runs a few virtual minutes on a fake desktop (floor + one window) and checks:
 needs decay, the cat hops onto the window and back, positions stay sane.
 
-Usage: PYTHONPATH=src .venv/bin/python tools/sim_test.py
+Usage: PYTHONPATH=src python3 tests/sim_test.py   (or: pytest)
 """
 import random
 import time

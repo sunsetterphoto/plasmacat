@@ -10,3 +10,8 @@ AGENTS.md
 dev-backup-*.tar.gz
 /Bildschirmfoto*.png
 /Screenshot*.png
+
+# Local planning docs (never pushed)
+docs/superpowers/
+.pytest_cache/
+.superpowers/
