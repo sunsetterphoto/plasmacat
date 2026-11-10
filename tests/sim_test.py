@@ -1257,7 +1257,7 @@ def main() -> None:
     from plasmacat.world.props import prop_to_pixels
 
     w, h, _px = prop_to_pixels("mouse")  # sprite is valid + registered
-    assert w == 14 and h == 8, (w, h)
+    assert (w, h) == (14 * 3 + 2, 8 * 3 + 2), (w, h)   # fine grid: 3 cells per px + outline pad
     dM = DesktopState(1920, 1080)
     catM = Cat(600, 1080, rng=random.Random(930))
     tmM = ToyManager(rng=random.Random(930))

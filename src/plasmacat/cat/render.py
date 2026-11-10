@@ -82,31 +82,6 @@ def sprite_rgba(frame: list[str], palette: dict) -> tuple[int, int, list]:
     return w, h, shade_rgba(w, h, px, pal["o"])
 
 
-def _thin_outline(rows: list[str]) -> list[str]:
-    """After upscaling, the outer outline is several cells thick: drop
-    outline cells that touch no fill (repeat until one cell remains)."""
-    g = [list(r) for r in rows]
-    h, w = len(g), len(g[0])
-    while True:
-        drop = []
-        for y in range(h):
-            for x in range(w):
-                if g[y][x] != "o":
-                    continue
-                touches_fill = any(
-                    0 <= x + dx < w and 0 <= y + dy < h and g[y + dy][x + dx] not in ".o"
-                    for dx in (-1, 0, 1) for dy in (-1, 0, 1))
-                touches_void = any(
-                    not (0 <= x + dx < w and 0 <= y + dy < h) or g[y + dy][x + dx] == "."
-                    for dx in (-1, 0, 1) for dy in (-1, 0, 1))
-                if touches_void and not touches_fill:
-                    drop.append((x, y))
-        if not drop:
-            return ["".join(r) for r in g]
-        for x, y in drop:
-            g[y][x] = "."
-
-
 def art_pixel_device(dpr: float, preference: str = "normal",
                      factor: float = 1.0) -> int:
     """Device pixels per art pixel: the preference's logical size times the
@@ -142,12 +117,10 @@ def _scaled(img: QImage, w: int, h: int, device_px: int, dpr: float) -> QPixmap:
 
 
 def prop_rgba(name: str) -> tuple[int, int, list]:
-    """A prop at PROP_DETAIL cells per prop pixel: upscaled, outer outline
-    thinned to one cell, shaded like the cat."""
+    """A prop as shaded RGBA. Props are authored on the fine grid already
+    (PROP_DETAIL cells per prop pixel, one-cell outline)."""
     from plasmacat.world.props import PROP_PALETTE, PROPS
-    k = PROP_DETAIL
-    rows = [r for r in PROPS[name] for _ in range(k)]
-    rows = _thin_outline(["".join(ch * k for ch in r) for r in rows])
+    rows = PROPS[name]
     w, h = len(rows[0]), len(rows)
     px = [(0, 0, 0, 0) if ch == "." else (*PROP_PALETTE[ch], 255)
           for r in rows for ch in r]
