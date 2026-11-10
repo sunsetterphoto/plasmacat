@@ -1,5 +1,6 @@
 """Placement / arrange mode and fullscreen hiding (headless, fake bridge)."""
 import pytest
+from conftest import dispose
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 
@@ -15,9 +16,7 @@ def overlay(qapp):
     b.start()
     ov.bridge_for_test = b
     yield ov
-    for layer in ov.furniture_layers:
-        layer.close()
-    ov.close()
+    dispose(*ov.furniture_layers, ov)
 
 
 def click(ov, x, y, button=Qt.MouseButton.LeftButton):

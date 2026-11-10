@@ -13,7 +13,23 @@ sys.path.insert(0, str(ROOT / "src"))
 import pytest
 
 
+def dispose(*widgets) -> None:
+    """Really destroy Qt widgets now: closing alone leaves them alive until
+    interpreter exit, where PySide6 tears them down after the QApplication
+    and segfaults."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    for w in widgets:
+        w.close()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 @pytest.fixture(scope="session")
 def qapp():
+    import gc
+
     from PySide6.QtWidgets import QApplication
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    yield app
+    dispose(*QApplication.topLevelWidgets())
+    gc.collect()

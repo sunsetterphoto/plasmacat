@@ -1,5 +1,6 @@
 """Control Center + appearance editor (headless)."""
 import pytest
+from conftest import dispose
 
 from plasmacat.persist import Customization, Settings
 
@@ -20,9 +21,7 @@ def ctl(qapp, tmp_path, monkeypatch):
     c = AppController(overlay=ov, player=SoundPlayer(data_file("sounds")), bridge=b,
                       settings=settings, save=lambda: saves.append(1))
     yield c
-    for layer in ov.furniture_layers:
-        layer.close()
-    ov.close()
+    dispose(*ov.furniture_layers, ov)
 
 
 @pytest.fixture
@@ -30,7 +29,7 @@ def cc(ctl):
     from plasmacat.ui.control_center import ControlCenter
     w = ControlCenter(ctl)
     yield w
-    w.close()
+    dispose(w)
 
 
 def test_cancel_customize_keeps_original(qapp):

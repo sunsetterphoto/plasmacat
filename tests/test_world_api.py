@@ -1,5 +1,6 @@
 """Overlay/player APIs the Control Center drives (headless, fake bridge)."""
 import pytest
+from conftest import dispose
 
 from plasmacat.persist import Customization, Settings
 
@@ -12,9 +13,7 @@ def overlay(qapp):
     ov = Overlay(b, settings=Settings())
     b.start()
     yield ov
-    for layer in ov.furniture_layers:
-        layer.close()
-    ov.close()
+    dispose(*ov.furniture_layers, ov)
 
 
 def test_furniture_items_lists_each_placed_piece(overlay):
