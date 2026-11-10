@@ -33,6 +33,7 @@ class Toy:
         self.vy = 0.0
         self.on_ground = False
         self.carried = False       # in the cat's mouth (gift delivery, P26)
+        self.claim = None          # the Brain fetching it as a gift
         self.last_bat = 0.0  # monotonic time of last bat (spam guard)
 
     def bat(self, from_x: float, desktop: DesktopState, power: float = 1.0) -> None:
@@ -134,8 +135,9 @@ class String(Toy):
         tx, ty = self.anchor[0], self.anchor[1] + 150
         self.vx += (tx - self.x) * 14 * dt
         self.vy += (ty - self.y) * 14 * dt
-        self.vx *= 0.94
-        self.vy *= 0.94
+        damp = 0.94 ** (dt * 60.0)   # per-second damping, frame-rate independent
+        self.vx *= damp
+        self.vy *= damp
         self.x += self.vx * dt
         self.y += self.vy * dt
         self.y = min(self.y, desktop.floor_y_at(self.x) - 6)  # per-screen (P38)

@@ -52,7 +52,7 @@ def main() -> None:
     print("states seen:", sorted(states_seen))
     print("needs after 3 min:", {k: round(v, 1) for k, v in cat.brain.needs.items()})
     print("hopped onto window:", hopped)
-    print("brain log:", cat.brain.log[:5])
+    print("brain log:", list(cat.brain.log)[:5])
 
     assert cat.brain.needs["hunger"] < 80.0, "hunger did not decay"
     assert hopped, "cat never jumped onto the window"
@@ -148,7 +148,7 @@ def main() -> None:
         if abs(ball.x - 800) > 50:
             ball_moved = True
     print(f"P6: ball batted={ball_moved}, xp={cat5.brain.attachment_xp:.1f}, "
-          f"log={cat5.brain.log[:3]}")
+          f"log={list(cat5.brain.log)[:3]}")
     assert ball_moved, "cat never batted the ball"
     assert cat5.brain.attachment_xp > 0, "no XP from playing"
 
@@ -1308,7 +1308,8 @@ def main() -> None:
     # -- P47: lifecycle (aging stages, care) + multi-cat household -------------
     import json
 
-    from plasmacat.cat.brain import CARE_EMPTY_S, Household, offline_aging
+    from plasmacat.cat.brain import CARE_EMPTY_S, offline_aging
+    from plasmacat.cat.household import Household
 
     # the growth-stage sprite tables: all 16 valid, adults byte-identical
     for s in range(sprites.STAGES):

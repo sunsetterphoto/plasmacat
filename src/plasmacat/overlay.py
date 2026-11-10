@@ -25,7 +25,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from plasmacat.bridge.desktop import DesktopState
-from plasmacat.cat.brain import Household
+from plasmacat.cat.household import Household
 from plasmacat.cat.cat import Cat
 from plasmacat.cat.interactions import CursorTracker, InteractionDetector
 from plasmacat.cat.minigames import MouseHunt
@@ -791,6 +791,7 @@ class Overlay(QWidget):
                 elif ev == "pat":
                     cat.brain.on_pat(cat.body, self.desktop.cursor)
 
+        self.household.tick(dt)   # shared timers advance once, not per cat
         for cat in self.cats:
             cat.tick(dt, self.desktop)
         fx_sounds: list[str] = []  # toy/hunt intents, not tied to one brain

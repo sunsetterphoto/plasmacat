@@ -29,15 +29,22 @@ class SoundPlayer:
         self._player_bin = shutil.which("pw-play") or shutil.which("paplay")
         for wav in sorted(self.sounds_dir.glob("*.wav")):
             self._load(wav.stem, wav, self.volume)
-        if self._effects:
-            first = next(iter(self._effects.values()))
-            self._qt_ok = first.status() != QSoundEffect.Status.Error
 
     def _load(self, name: str, wav: Path, volume: float) -> None:
         eff = QSoundEffect()
+        # loading is asynchronous: an Error only shows up later, so watch it
+        eff.statusChanged.connect(lambda e=eff: self._on_effect_status(e.status()))
         eff.setSource(QUrl.fromLocalFile(str(wav)))
         eff.setVolume(volume)
         self._effects[name] = eff
+
+    def _on_effect_status(self, status) -> None:
+        """A QtMultimedia backend that cannot play our WAVs switches the
+        whole player to the pw-play/paplay fallback."""
+        if status == QSoundEffect.Status.Error and self._qt_ok:
+            self._qt_ok = False
+            print("[sound] QtMultimedia failed — falling back to",
+                  self._player_bin or "silence")
 
     def play(self, name: str, cooldown: float = 0.4) -> None:
         if self.muted:

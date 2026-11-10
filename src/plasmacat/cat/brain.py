@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import random
 import time
+from collections import deque
 
 from plasmacat.bridge.desktop import DesktopState, Platform
+from plasmacat.cat.household import Household
 from plasmacat.cat.physics import CatBody, RUN_SPEED, WALK_SPEED
 
 # Decay per real-time second (tuned for a desktop pet: noticeable in ~1-2 h).
@@ -45,33 +47,6 @@ AGE_MAX = 15.0                  # growth stages 0 (kitten) .. 15 (very old)
 AGE_STAGE_S = 8 * 3600.0        # base pace: one stage per 8 h of run time
 CARE_EMPTY_S = 7200.0           # attention reservoir 1 -> 0 in 2 h
 YOUNG_BAND = (3.0, 9.0)         # the 'young adult' band interaction stretches
-
-
-class Household:
-    """The shared home all cats live in (P47): bowl/furniture positions and
-    consumables (food fill, litter fill, grass charges, puke spots). Every
-    Brain forwards these attributes here, so all cats drink from the same
-    fountain and share one litter box."""
-
-    def __init__(self) -> None:
-        self.food_x: float | None = None
-        self.water_x: float | None = None
-        self.food_type = "kibble"
-        self.food_fill = 100.0              # 0..100, drains while eating
-        self.water_fill = 100.0
-        self.scratch_x: float | None = None
-        self.bed_x: float | None = None
-        self.grass_x: float | None = None
-        self.grass_charges = 3.0            # nibbles left; regrows over 10 min
-        self._grass_regrow = 0.0
-        self.litter_x: float | None = None
-        self.litter_fill = 0.0              # poop units; user cleans at 5
-        self.litter_deposits: list[str] = []  # P40: "poop"/"pee" per event
-        self.tree_x: float | None = None
-        self.wheel_x: float | None = None
-        self.shelves: list[tuple[float, float]] = []
-        self.box_x: float | None = None
-        self.puke_spots: list[float] = []   # x positions of messes to clean up
 
 
 def offline_aging(age: float, care: float, elapsed: float) -> tuple[float, float]:
@@ -150,7 +125,7 @@ class Brain:
         # Household; this brain's same-named attributes forward there (see the
         # property wiring at the bottom of the class). A brain constructed
         # without one gets a private household (tests, single-cat runs).
-        self.household = household or Household()
+        self.household = household or Household(private=True)
         self.needs: dict[str, float] = {
             "hunger": 80.0, "thirst": 80.0, "energy": 90.0,
             "play": 70.0, "affection": 50.0, "bladder": 85.0,
@@ -165,7 +140,7 @@ class Brain:
         self.hunt_target: tuple[float, float] | None = None
         self.petted_strokes = 0
         self.attachment_xp = 0.0
-        self.log: list[str] = []
+        self.log: deque[str] = deque(maxlen=200)  # debug trail, bounded
         # P47 lifecycle: age in growth stages (float, 0..15) and the care
         # reservoir (0..1) that interaction refills and time drains
         self.age = 6.0                      # adult default; kittens start at 0
@@ -205,6 +180,7 @@ class Brain:
         self._circ = (1.0, 1.0)          # circadian (sleep, activity) multipliers
         self._jump_then: tuple[float, float, str] | None = None  # after prep
         self._gift_toy = None            # plush being carried to the human
+        self._land_then = "idle"         # state after landing (supervise drop)
         # P28: the visibility level is a deliberate decision with a dwell
         # time, not a per-frame derivation (no more chaotic flip-flopping)
         self._level = "front"
@@ -240,12 +216,10 @@ class Brain:
                 self.needs[k] = min(100.0, self.needs[k] + SLEEP_REGEN * self._sleep_mult * dt)
             else:
                 self.needs[k] = max(0.0, self.needs[k] - rate * dt)
-        # cat grass regrows one charge per 10 minutes
-        if self.grass_charges < 3.0:
-            self._grass_regrow += dt
-            if self._grass_regrow >= 600.0:
-                self.grass_charges += 1.0
-                self._grass_regrow = 0.0
+        # a shared home is ticked once per frame by the overlay; a private
+        # one (tests, a lone brain) advances with its only cat
+        if self.household.private:
+            self.household.tick(dt)
 
     @property
     def mood(self) -> float:
@@ -995,11 +969,13 @@ class Brain:
             self.state_left = self.rng.uniform(20, 45)  # session length
             self.log.append("LASER!")
         elif name == "gift":
-            toy = next((t for t in self.toys.toys if t.kind == "plush"), None)
+            toy = next((t for t in self.toys.toys if t.kind == "plush"
+                        and not t.carried and not self._claimed_by_other(t)), None)
             if toy is None:
                 self.state = "sit"
                 self.state_left = 2.0
             else:
+                toy.claim = self
                 self._gift_toy = toy
                 offset = 45 * (-1 if toy.x < body.x else 1)
                 body.walk_to(toy.x + offset, WALK_SPEED)
@@ -1175,7 +1151,7 @@ class Brain:
                 self.state_left = 0.22
         elif self.state == "land":
             if self.state_left <= 0:
-                if getattr(self, "_land_then", "idle") == "supervise":
+                if self._land_then == "supervise":
                     self.state = "supervise"
                     self.state_left = self.rng.uniform(8, 18)
                 else:
@@ -1886,6 +1862,10 @@ class Brain:
                 self._gift_toy = None
                 self.state = "idle"
                 self.state_left = 0.0
+            elif self._gift_toy.carried or self._claimed_by_other(self._gift_toy):
+                self._gift_toy = None   # another cat got there first
+                self.state = "idle"
+                self.state_left = 0.0
             elif body.target_x is None:
                 # picked it up: the plush rides at her mouth now
                 self._gift_toy.carried = True
@@ -1977,6 +1957,11 @@ class Brain:
             if self.state_left <= 0:
                 self.state = "idle"
 
+    def _claimed_by_other(self, toy) -> bool:
+        """Another cat is already fetching this plush as her gift."""
+        other = getattr(toy, "claim", None)
+        return other is not None and other is not self and other._gift_toy is toy
+
     def _fmt_needs(self) -> str:
         return " ".join(f"{k}={v:.0f}" for k, v in self.needs.items())
 
@@ -1991,7 +1976,7 @@ def _household_forward(name: str):
 
 for _forwarded in ("food_x", "water_x", "food_type", "food_fill", "water_fill",
                    "scratch_x", "bed_x", "grass_x", "grass_charges",
-                   "_grass_regrow", "litter_x", "litter_fill", "litter_deposits",
+                   "litter_x", "litter_fill", "litter_deposits",
                    "tree_x", "wheel_x", "shelves", "box_x", "puke_spots"):
     setattr(Brain, _forwarded, _household_forward(_forwarded))
 del _forwarded

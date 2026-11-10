@@ -6,7 +6,8 @@ import random
 
 from plasmacat.bridge.desktop import DesktopState
 from plasmacat.cat.animations import ANIMATIONS
-from plasmacat.cat.brain import Brain, Household
+from plasmacat.cat.brain import Brain
+from plasmacat.cat.household import Household
 from plasmacat.cat.physics import WALK_SPEED, CatBody
 from plasmacat.persist import Customization
 
