@@ -135,6 +135,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self._hunt: MouseHunt | None = None  # P42: mouse-hunt session
         self.notify = None  # optional callback(title, msg) set by the app
         self._hidden: set[str] = set()   # reasons to hide all windows
+        self.last_notify_kind: str | None = None
         self._bridge = bridge
         self.furniture_layers = [FurnitureLayer(self, s)
                                  for s in QGuiApplication.screens()]
@@ -238,8 +239,13 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         return bool(self._hidden)
 
     def _notify(self, kind: str, title: str, msg: str) -> None:
-        """A desktop notification, if the user wants this kind (System tab)."""
+        """A desktop notification, if the user wants this kind (System tab).
+        Hidden cats (pause, fullscreen) only let the update offer through.
+        The kind of the last one shown decides what a click on it does."""
+        if self._hidden and kind != "update":
+            return
         if self.notify is not None and self.settings.notify.get(kind, True):
+            self.last_notify_kind = kind
             self.notify(title, msg)
 
     # -- furniture management (Control Center → Home) ---------------------------
@@ -364,6 +370,11 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self.update()
 
     def _on_work_areas(self, areas: list[dict]) -> None:
+        # refine each floor with Plasma's panel settings (bridge/panels.py)
+        if any(a.get("panels") for a in areas):
+            from plasmacat.bridge.panels import query_plasma_panels, refine_floor
+            plasma = query_plasma_panels()
+            areas = [dict(a, h=round(refine_floor(a, plasma) - a["y"])) for a in areas]
         self.desktop.set_work_areas(areas)
         if self.debug:
             print(f"[dbg] work areas -> {areas}")
@@ -683,7 +694,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         live = {id(c) for c in self.cats}
         for key in [k for k in self._detectors if k not in live]:
             del self._detectors[key]  # a removed cat
-        for cat in self.cats:
+        for cat in ([] if self._hidden else self.cats):   # hidden: no reactions
             det = self._detectors.setdefault(
                 id(cat), InteractionDetector(self._tracker))
             rect = self._cat_rect(cat)
@@ -742,7 +753,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                       f"cats={len(self.cats)} "
                       f"catworld=({self.cat.body.x:.0f},{self.cat.body.y:.0f})")
 
-        if self.player:
+        if self.player and not self._hidden:   # hidden cats are silent
             for cat in self.cats:
                 for sound in cat.brain.sounds:
                     self.player.play(sound)

@@ -124,3 +124,30 @@ def test_apply_update_runs_the_updater_then_restarts(ctl, tmp_path, monkeypatch)
     ctl.pending_update = "v9.9.9"
     ctl.apply_update()
     assert calls == [["--apply"], "restart"]
+
+
+def test_only_the_update_offer_click_installs(ctl, monkeypatch):
+    applied = []
+    monkeypatch.setattr(ctl, "apply_update", lambda *a: applied.append(1))
+    ctl.pending_update = "v9.9.9"
+    ctl.overlay.notify = lambda title, msg: None
+    ctl.overlay._notify("litter", "PlasmaCat", "litter box full")
+    ctl.notification_clicked()
+    assert applied == []
+    ctl.overlay._notify("update", "PlasmaCat update", "v9.9.9 is available")
+    ctl.notification_clicked()
+    assert applied == [1]
+
+
+def test_hidden_cats_are_silent(ctl, monkeypatch):
+    played = []
+    monkeypatch.setattr(ctl.player, "play", lambda name, cooldown=0.4: played.append(name))
+    ov = ctl.overlay
+    ov.set_hidden("fullscreen", True)
+    ov.cat.brain.sounds.append("meow")
+    ov._clock.restart()
+    import time
+    time.sleep(0.01)
+    ov._tick()
+    assert played == []
+    assert ov.cat.brain.sounds == []          # dropped, not queued for later

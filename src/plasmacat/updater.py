@@ -4,6 +4,8 @@ Check, offer, then install — the user decides:
   python3 -m plasmacat.updater [APP_DIR]          check GitHub for a newer
         release tag (vX.Y.Z); if there is one, write <app>/.available — the
         running app offers it ("PlasmaCat vX is available — click to update")
+  python3 -m plasmacat.updater --manual [APP_DIR] the same check, even when
+        automatic checks are switched off ('Check now')
   python3 -m plasmacat.updater --apply [APP_DIR]  fast-forward to the newest
         release (never to untagged work, never over local changes) and write
         <app>/.updated; the app restarts itself
@@ -61,11 +63,12 @@ def current_version(app: Path) -> str | None:
         return None
 
 
-def check(app: Path, save_path: Path | None = None, apply: bool = False) -> UpdateStatus:
+def check(app: Path, save_path: Path | None = None, apply: bool = False,
+          manual: bool = False) -> UpdateStatus:
     app = Path(app)
     if not (app / ".git").exists():
         return UpdateStatus(None, None, False, f"{app} is not a git checkout")
-    if not apply and not _auto_update_enabled(save_path):
+    if not (apply or manual) and not _auto_update_enabled(save_path):
         return UpdateStatus(current_version(app), None, False,
                             "automatic updates are disabled in the settings")
     try:
@@ -101,10 +104,10 @@ def check(app: Path, save_path: Path | None = None, apply: bool = False) -> Upda
 def main(argv: list[str] | None = None) -> int:
     from plasmacat.paths import state_dir
     argv = list(sys.argv[1:] if argv is None else argv)
-    apply = "--apply" in argv
-    rest = [a for a in argv if a != "--apply"]
+    apply, manual = "--apply" in argv, "--manual" in argv
+    rest = [a for a in argv if a not in ("--apply", "--manual")]
     app = Path(rest[0]) if rest else Path(__file__).resolve().parents[2]
-    st = check(app, save_path=state_dir() / "save.json", apply=apply)
+    st = check(app, save_path=state_dir() / "save.json", apply=apply, manual=manual)
     print(f"[plasmacat-update] {st.message}")
     return 0
 

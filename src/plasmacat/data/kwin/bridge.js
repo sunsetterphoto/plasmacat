@@ -145,10 +145,14 @@ function sendWorkAreas() {
   for (let i = 0; i < outs.length; i++) {
     if (outs[i] !== workspace.activeScreen) ordered.push(outs[i]);
   }
+  // only visible, horizontal panels can carry a floor (a side panel or an
+  // auto-hidden one must never lift it)
   const docks = [];
   const stack = workspace.stackingOrder;
   for (let i = 0; i < stack.length; i++) {
-    if (stack[i].dock) docks.push(stack[i].frameGeometry);
+    const w = stack[i];
+    const g = w.frameGeometry;
+    if (w.dock && !w.hidden && g.width > g.height) docks.push(g);
   }
   const areas = [];
   for (let i = 0; i < ordered.length; i++) {
@@ -157,16 +161,22 @@ function sendWorkAreas() {
     const areaBottom = a.y + a.height;
     const reserved = Math.max(0, (fa.y + fa.height) - areaBottom);  // bottom strut
     let bottom = areaBottom;
+    const panels = [];
     for (let d = 0; d < docks.length; d++) {
       const dg = docks[d];
       const hOverlap = dg.x < a.x + a.width && dg.x + dg.width > a.x;
       const atBottom = dg.y + dg.height >= areaBottom - 4;
       if (hOverlap && atBottom && dg.y < areaBottom) {
         bottom = Math.min(bottom, visualFloor(areaBottom, reserved, dg));
+        panels.push({ y: Math.round(dg.y), h: Math.round(dg.height),
+                      reserved: Math.round(reserved) });
       }
     }
+    // the app refines the floor with Plasma's panel settings (floating?
+    // thickness?) — it needs the raw bottom and the panels for that
     areas.push({ x: Math.round(a.x), y: Math.round(a.y),
-                 w: Math.round(a.width), h: Math.round(bottom - a.y) });
+                 w: Math.round(a.width), h: Math.round(bottom - a.y),
+                 raw_bottom: Math.round(areaBottom), panels: panels });
   }
   call("SetWorkAreas", JSON.stringify(areas));
 }
@@ -214,6 +224,11 @@ function watchWindow(w) {
   w.fullScreenChanged.connect(function () {
     if (!isPlasmaCatWindow(w)) sendFullscreen();
   });
+  if (w.hiddenChanged) {
+    w.hiddenChanged.connect(function () {
+      if (w.dock) scheduleWorkAreas();   // auto-hide panels slide in/out
+    });
+  }
   if (!isPlasmaCatWindow(w)) {
     scheduleWindows();
     if (w.dock) scheduleWorkAreas();

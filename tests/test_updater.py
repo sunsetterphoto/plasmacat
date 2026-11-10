@@ -78,3 +78,11 @@ def test_disabled_in_settings_skips(repos, tmp_path):
 def test_not_a_git_checkout(tmp_path):
     st = updater.check(tmp_path)
     assert not st.updated and "not a git checkout" in st.message
+
+
+def test_manual_check_works_when_automatic_checks_are_off(repos, tmp_path):
+    _origin, app = repos
+    save = tmp_path / "save.json"
+    save.write_text(json.dumps({"settings": {"auto_update": False}}))
+    st = updater.check(app, save_path=save, manual=True)
+    assert st.available == "v0.2.1"

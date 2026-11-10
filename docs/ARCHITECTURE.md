@@ -65,8 +65,14 @@ floating over it**. A floating panel's frame includes its float gap:
   frame 60, panel 44) → the gap is assumed: min(8, height / 4).
 - A docked panel: frame == strut → its frame top.
 
-`visualFloor()` in the script implements this; `tests/bridge.test.mjs` pins
-all three cases.
+`visualFloor()` in the script estimates this. Only visible, horizontal
+panels count (a side panel or an auto-hidden one never lifts the floor;
+`hiddenChanged` refreshes it when an auto-hide panel slides in). Because
+KWin only sees frames, the app then asks plasmashell (`bridge/panels.py`,
+its scripting interface) whether each bottom panel floats and how thick it
+is, and puts the floor on the exact visible top — this also covers docked
+panels without a strut ("dodge windows"). `tests/bridge.test.mjs` and
+`tests/test_panels.py` pin the cases.
 
 ## Windows and layers
 
@@ -81,7 +87,9 @@ all three cases.
 - **Placement / arrange mode** temporarily makes the front window fullscreen
   and input-receiving (plain title: the script leaves it alone).
 - **Hiding**: `Overlay.set_hidden(reason, on)` hides every window while any
-  reason holds (`pause`, `fullscreen`); the simulation keeps running.
+  reason holds (`pause`, `fullscreen`). Needs keep running, but hidden cats
+  are silent, ignore the cursor and send no notifications (except an update
+  offer).
 
 ## World model and physics
 
@@ -132,7 +140,9 @@ the pre-rename `catgame` dir) migrate on load.
 `install.sh` clones the repository to `~/.local/share/plasmacat/app` and
 checks out the newest `vX.Y.Z` tag. A daily systemd user timer (and the app,
 20 s after start) runs `python3 -m plasmacat.updater`, which only *checks* and
-writes `.available`; the app offers the release. `--apply` fast-forwards to
+writes `.available`; the app offers the release (only a click on that offer
+— not on any other notification — installs it). *Check now* uses
+`--manual`, which works even with automatic checks switched off. `--apply` fast-forwards to
 the newest tag (never untagged work, never over local changes) and the app
 restarts. Releases are git tags on `main`.
 

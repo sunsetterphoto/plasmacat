@@ -275,12 +275,19 @@ class AppController(QObject):
         proc.start()
         self._update_proc = proc
 
-    def check_updates_now(self, on_done: Callable[[str], None]) -> None:
-        """Ask GitHub for a newer release (offers it via the marker)."""
+    def check_updates_now(self, on_done: Callable[[str], None],
+                          manual: bool = True) -> None:
+        """Ask GitHub for a newer release (offers it via the marker). A
+        manual check runs even when automatic checks are switched off."""
         def done(msg: str) -> None:
             self._check_update_marker()
             on_done(msg)
-        self._run_updater([], done)
+        self._run_updater(["--manual"] if manual else [], done)
+
+    def notification_clicked(self) -> None:
+        """A click on a tray notification: only the update offer acts."""
+        if self.overlay.last_notify_kind == "update" and self.pending_update:
+            self.apply_update()
 
     def apply_update(self, on_done: Callable[[str], None] | None = None) -> None:
         """Install the offered release, then restart into it."""

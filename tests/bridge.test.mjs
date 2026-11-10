@@ -131,3 +131,38 @@ test("active fullscreen window is reported", () => {
   workspace.windowActivated(w);
   assert.deepEqual(calls.filter((c) => c.method === "SetActiveFullscreen").map((c) => c.payload), ["1"]);
 });
+
+test("a side panel without a strut never becomes the floor", () => {
+  const left = makeWindow({ dock: true, normalWindow: false, resourceClass: "plasmashell",
+                            frameGeometry: { x: 0, y: 0, width: 60, height: 1091 } });
+  const { ctx, calls } = load({ windows: [left] });
+  ctx.sendWorkAreas();
+  const areas = JSON.parse(calls.find((c) => c.method === "SetWorkAreas").payload);
+  assert.equal(areas[0].h, 1091);
+});
+
+test("an auto-hidden panel is ignored, and showing it updates the floor", () => {
+  const panel = makeWindow({ dock: true, normalWindow: false, resourceClass: "plasmashell",
+                             hidden: true, hiddenChanged: sig(),
+                             frameGeometry: { x: 0, y: 1031, width: 1745, height: 60 } });
+  const { ctx, calls, flush } = load({ windows: [panel] });
+  ctx.sendWorkAreas();
+  let areas = JSON.parse(calls.filter((c) => c.method === "SetWorkAreas").pop().payload);
+  assert.equal(areas[0].h, 1091);
+  calls.length = 0;
+  panel.hidden = false;
+  panel.hiddenChanged();
+  flush();
+  areas = JSON.parse(calls.filter((c) => c.method === "SetWorkAreas").pop().payload);
+  assert.equal(areas[0].h, 1039);
+});
+
+test("work areas carry the raw bottom and the panels for refinement", () => {
+  const panel = makeWindow({ dock: true, normalWindow: false, resourceClass: "plasmashell",
+                             frameGeometry: { x: 0, y: 1047, width: 1745, height: 44 } });
+  const { ctx, calls } = load({ windows: [panel] });
+  ctx.sendWorkAreas();
+  const a = JSON.parse(calls.find((c) => c.method === "SetWorkAreas").payload)[0];
+  assert.equal(a.raw_bottom, 1091);
+  assert.deepEqual(a.panels, [{ y: 1047, h: 44, reserved: 0 }]);
+});
