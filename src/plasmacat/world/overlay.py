@@ -224,6 +224,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         (self._hidden.add if on else self._hidden.discard)(reason)
         if bool(self._hidden) == hidden_before:
             return
+        if self.debug:
+            print(f"[dbg] hidden -> {sorted(self._hidden) or 'visible'}")
         windows = [self] + list(self.furniture_layers)
         for w in windows:
             w.setVisible(not self._hidden)
