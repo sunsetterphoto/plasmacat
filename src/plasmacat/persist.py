@@ -1,7 +1,7 @@
 """Persistence: save/load game state as JSON, with offline need decay.
 
-Save file: <AppDataLocation>/save.json (Linux: ~/.local/share/catgame/save.json —
-the app name stays 'catgame' for save continuity across the PlasmaCat rename).
+Save file: ~/.local/share/plasmacat/save.json (see paths.state_dir; an old
+~/.local/share/catgame dir is migrated at startup).
 Pure json/dataclasses, no Qt — testable headless.
 """
 
@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SAVE_VERSION = 2  # v2: cats[] list (P47 multi-cat); v1 single-cat keys migrate
+SAVE_VERSION = 3  # v3: settings{}; v2: cats[] list (P47); v1 single-cat keys migrate
 MAX_OFFLINE_SECONDS = 4 * 3600  # decay while away is capped at 4 h worth
 
 
@@ -27,11 +27,6 @@ class Customization:
     eye: tuple[int, int, int] = (90, 200, 90)       # 'e'
     pattern: str = "solid"                          # solid|tabby|tuxedo|spots|tortie
     collar: tuple[int, int, int] | None = None      # 'a' (None = no collar)
-    sound_on: bool = True
-    volume: float = 0.7
-    status_window: bool = False                     # P42: pinned status board
-    status_pos: list | None = None                  # [x, y] world coords (None
-                                                    # = default: bottom-left)
 
     def derive_shade(self) -> tuple[int, int, int]:
         if self.fur_shade is not None:
@@ -67,13 +62,91 @@ class Customization:
             eye=rgb(d.get("eye")) or (90, 200, 90),
             pattern=d.get("pattern", "solid"),
             collar=rgb(d.get("collar")),
-            sound_on=d.get("sound_on", True),
-            volume=d.get("volume", 0.7),
-            status_window=d.get("status_window", False),
-            status_pos=(lambda v: [float(v[0]), float(v[1])]
-                        if isinstance(v, (list, tuple)) and len(v) == 2
-                        else None)(d.get("status_pos")),
         )
+
+
+NEED_ROWS = ("hunger", "thirst", "energy", "play", "affection", "bladder",
+             "food_bowl", "litter_box")
+SOUND_GROUPS = ("voice", "purr", "eating", "play", "alerts")
+NOTIFY_KINDS = ("litter", "vomit", "games")
+PIXEL_SIZES = ("fine", "normal", "chunky")
+
+
+def _pos(v) -> list | None:
+    if isinstance(v, (list, tuple)) and len(v) == 2:
+        try:
+            return [float(v[0]), float(v[1])]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+@dataclass
+class Settings:
+    """App-wide preferences (one per household), edited in the Control
+    Center. Each tab's fields can be reset on their own (defaults_for)."""
+    # Sound tab
+    sound_on: bool = True
+    volume: float = 0.7
+    sound_groups: dict[str, bool] = field(
+        default_factory=lambda: {g: True for g in SOUND_GROUPS})
+    # Home tab: the pinned status board
+    status_board: bool = False
+    status_pos: list | None = None      # [x, y] world coords; None = bottom-left
+    status_rows: dict[str, bool] = field(
+        default_factory=lambda: {r: True for r in NEED_ROWS})
+    # System tab
+    pixel_size: str = "normal"
+    hide_on_fullscreen: bool = True
+    notify: dict[str, bool] = field(
+        default_factory=lambda: {k: True for k in NOTIFY_KINDS})
+    auto_update: bool = True
+
+    TABS = {
+        "sound": ("sound_on", "volume", "sound_groups"),
+        "home": ("status_board", "status_pos", "status_rows"),
+        "system": ("pixel_size", "hide_on_fullscreen", "notify", "auto_update"),
+    }
+
+    @classmethod
+    def defaults_for(cls, tab: str) -> dict:
+        fresh = cls()
+        return {k: getattr(fresh, k) for k in cls.TABS[tab]}
+
+    def reset(self, tab: str) -> None:
+        for k, v in self.defaults_for(tab).items():
+            setattr(self, k, v)
+
+    def to_json(self) -> dict:
+        return {k: getattr(self, k) for k in self.__dataclass_fields__}
+
+    @staticmethod
+    def from_json(d: dict) -> "Settings":
+        s = Settings()
+
+        def flag(key: str) -> None:
+            if isinstance(d.get(key), bool):
+                setattr(s, key, d[key])
+
+        def flags(key: str) -> None:
+            src = d.get(key)
+            if isinstance(src, dict):
+                target = getattr(s, key)
+                for k in target:
+                    if isinstance(src.get(k), bool):
+                        target[k] = src[k]
+
+        for key in ("sound_on", "status_board", "hide_on_fullscreen", "auto_update"):
+            flag(key)
+        for key in ("sound_groups", "status_rows", "notify"):
+            flags(key)
+        v = d.get("volume")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            s.volume = min(max(float(v), 0.0), 1.0)
+        s.status_pos = _pos(d.get("status_pos"))
+        if d.get("pixel_size") in PIXEL_SIZES:
+            s.pixel_size = d["pixel_size"]
+        return s
 
 
 @dataclass
@@ -110,6 +183,7 @@ class GameState:
     box_x: float | None = None            # P25: cardboard box
     shelves: list[dict] = field(default_factory=list)  # P25: [{x, y}] wall shelves
     puke_spots: list[float] = field(default_factory=list)  # P25: messes to clean
+    settings: Settings = field(default_factory=Settings)
     saved_at: float = 0.0
 
     @property
@@ -150,6 +224,7 @@ def save(path: Path, state: GameState) -> None:
         "box_x": state.box_x,
         "shelves": state.shelves,
         "puke_spots": state.puke_spots,
+        "settings": state.settings.to_json(),
         "saved_at": state.saved_at,
     }
     # atomic write: a crash mid-save must not truncate save.json — the old
@@ -176,6 +251,22 @@ def _cat_from_json(c: dict) -> CatState:
         care=float(c.get("care", 0.5)),
         fav_toy=c.get("fav_toy", ""),
     )
+
+
+def _settings_from(d: dict) -> Settings:
+    """Settings of a save; saves before 0.2 kept sound/status in the primary
+    cat's customization."""
+    if isinstance(d.get("settings"), dict):
+        return Settings.from_json(d["settings"])
+    cats = d.get("cats")
+    cust = (cats[0].get("customization") if isinstance(cats, list) and cats
+            and isinstance(cats[0], dict) else d.get("customization")) or {}
+    return Settings.from_json({
+        "sound_on": cust.get("sound_on", True),
+        "volume": cust.get("volume", 0.7),
+        "status_board": cust.get("status_window", False),
+        "status_pos": cust.get("status_pos"),
+    })
 
 
 def load(path: Path) -> GameState | None:
@@ -220,6 +311,7 @@ def load(path: Path) -> GameState | None:
             box_x=d.get("box_x"),
             shelves=[s for s in d.get("shelves", []) if isinstance(s, dict)],
             puke_spots=[float(x) for x in d.get("puke_spots", [])],
+            settings=_settings_from(d),
             saved_at=float(d.get("saved_at", 0.0)),
         )
     except (OSError, json.JSONDecodeError, ValueError, TypeError, KeyError):

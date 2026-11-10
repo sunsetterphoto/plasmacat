@@ -1,19 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "plasmacat"
-version = "0.1.0"
-description = "Desktop companion cat for KDE Plasma (pixel-art virtual pet)"
+version = "0.2.0"
+description = "Pixel-art desktop companion cat for KDE Plasma (Wayland)"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
-# Runtime needs Qt only (numpy/pillow were removed with the 8-bit synth, P49).
+# Qt only. Fedora users can rely on the distro package python3-pyside6.
 dependencies = [
     "PySide6-Essentials>=6.6",
     "PySide6-Addons>=6.6",
 ]
 
 [project.optional-dependencies]
-# only tools/render_sheet.py (sprite art review) needs pillow
-tools = ["pillow>=10.0"]
+dev = ["pytest>=8"]
 
-# NOTE: the game runs from a repo checkout (./run.sh) — the KWin script and
-# the sound assets are resolved relative to the package root.
 [project.scripts]
 plasmacat = "plasmacat.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+plasmacat = ["data/*", "data/**/*"]

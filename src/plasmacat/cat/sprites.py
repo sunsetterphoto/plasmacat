@@ -18,8 +18,18 @@ big pupiled eye, whiskers. Canvas 64x48, displayed at 2x (P8e: finer contours).
 
 from __future__ import annotations
 
+import math
+
+# Poses are authored in a 64x48 coordinate space (CANVAS_*); they are
+# rasterized DETAIL times finer (GRID_*): curves, ears and contours get twice
+# the resolution and the auto-outline is half as thick. Single detail pixels
+# placed with Canvas.set() stay DETAILxDETAIL blocks (same look as before);
+# Canvas.fine() places one grid cell (whiskers, eye glints).
 CANVAS_W = 64
 CANVAS_H = 48
+DETAIL = 2
+GRID_W = CANVAS_W * DETAIL
+GRID_H = CANVAS_H * DETAIL
 
 # -- growth stages (P47) -------------------------------------------------------
 # 16 life stages: 0 = kitten … 5 = grown, 6-10 = prime adult, 11+ = senior,
@@ -63,7 +73,7 @@ def aged_palette(palette: dict[str, tuple[int, int, int]],
         return palette
     t = (s - 10) / 5.0 * 0.45
     out = dict(palette)
-    for k in ("f", "F", "b"):
+    for k in ("f", "F", "b", "D"):
         r, g, b = out[k]
         grey = (r + g + b) / 3.0
         out[k] = (int(round(r + (grey - r) * t)),
@@ -81,12 +91,22 @@ DEFAULT_PALETTE: dict[str, tuple[int, int, int]] = {
     "n": (240, 140, 150),     # nose / inner ear
     "w": (255, 255, 255),     # eye white / whiskers
     "a": (200, 60, 80),       # accessory
+    "D": (130, 65, 25),       # deep fur shade (tortie patches)
 }
+
+
+def complete_palette(palette: dict[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
+    """Fill derived slots a custom palette may lack ('D' from the shade)."""
+    out = dict(DEFAULT_PALETTE)
+    out.update(palette)
+    if "D" not in palette:
+        out["D"] = tuple(int(c * 0.62) for c in out["F"])  # type: ignore[assignment]
+    return out
 
 
 class Canvas:
     def __init__(self) -> None:
-        self.g = [["."] * CANVAS_W for _ in range(CANVAS_H)]
+        self.g = [["."] * GRID_W for _ in range(GRID_H)]
         self._hz: tuple[float, float] | None = None  # head warp center (P47)
 
     def head_zone(self, hx: float, hy: float) -> None:
@@ -94,12 +114,16 @@ class Canvas:
         this automatically; poses with inline ears call it explicitly."""
         self._hz = (hx, hy)
 
+    def _identity(self) -> bool:
+        return (_PROFILE["scale"] == 1.0 and _PROFILE["hunch"] == 1.0
+                and (self._hz is None or _PROFILE["head"] == 1.0))
+
     def _map(self, x: float, y: float) -> tuple[float, float]:
         """Growth-stage transform (P47), applied to every drawing coordinate:
         1. a smooth radial warp around the head (kitten: big head; the field
            falls off to 0 at _HEAD_WARP_R so body and head stay connected),
         2. a global scale anchored at the feet (bottom row stays the feet).
-        Stage 6 is the identity — adult sprites are byte-identical to before."""
+        Stage 6 is the identity."""
         if self._hz is not None:
             target = _PROFILE["head"]
             if target != 1.0:
@@ -117,18 +141,81 @@ class Canvas:
             y = CANVAS_H - (CANVAS_H - y) * s * _PROFILE["hunch"]
         return x, y
 
-    def set(self, x: float, y: float, ch: str) -> None:
-        x, y = self._map(x, y)
-        x, y = int(round(x)), int(round(y))
-        if 0 <= x < CANVAS_W and 0 <= y < CANVAS_H:
-            self.g[y][x] = ch
+    # -- pixel access (pose coordinates) ---------------------------------------
 
-    def get(self, x: int, y: int) -> str:
+    def set(self, x: float, y: float, ch: str) -> None:
+        """One pose pixel = a DETAIL x DETAIL block of grid cells."""
         x, y = self._map(x, y)
-        x, y = int(round(x)), int(round(y))
-        if 0 <= x < CANVAS_W and 0 <= y < CANVAS_H:
-            return self.g[y][x]
+        gx, gy = int(round(x)) * DETAIL, int(round(y)) * DETAIL
+        for yy in range(max(gy, 0), min(gy + DETAIL, GRID_H)):
+            row = self.g[yy]
+            for xx in range(max(gx, 0), min(gx + DETAIL, GRID_W)):
+                row[xx] = ch
+
+    def fine(self, x: float, y: float, ch: str) -> None:
+        """One grid cell at a pose coordinate (fine details)."""
+        x, y = self._map(x, y)
+        gx = int(math.floor((x + 0.5) * DETAIL))
+        gy = int(math.floor((y + 0.5) * DETAIL))
+        if 0 <= gx < GRID_W and 0 <= gy < GRID_H:
+            self.g[gy][gx] = ch
+
+    def fine_line(self, x0: float, y0: float, x1: float, y1: float, ch: str) -> None:
+        """A one-cell-wide line in pose coordinates."""
+        steps = int(max(abs(x1 - x0), abs(y1 - y0)) * DETAIL * 2) + 1
+        for i in range(steps + 1):
+            t = i / steps
+            self.fine(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, ch)
+
+    def get(self, x: float, y: float) -> str:
+        x, y = self._map(x, y)
+        gx, gy = int(round(x)) * DETAIL, int(round(y)) * DETAIL
+        if 0 <= gx < GRID_W and 0 <= gy < GRID_H:
+            return self.g[gy][gx]
         return "."
+
+    # -- shapes (rasterized at grid resolution) ---------------------------------
+
+    def _fill(self, x0: float, y0: float, x1: float, y1: float, inside, ch: str) -> None:
+        """Fill every grid cell whose center (in pose space) is inside.
+        Identity stages test cell centers directly; warped stages sample the
+        pose space densely and map forward (the warp has no cheap inverse)."""
+        if self._identity():
+            gx0 = max(0, int(math.floor((x0 + 0.5) * DETAIL)))
+            gx1 = min(GRID_W - 1, int(math.ceil((x1 + 0.5) * DETAIL)))
+            gy0 = max(0, int(math.floor((y0 + 0.5) * DETAIL)))
+            gy1 = min(GRID_H - 1, int(math.ceil((y1 + 0.5) * DETAIL)))
+            for gy in range(gy0, gy1 + 1):
+                py = (gy + 0.5) / DETAIL - 0.5
+                row = self.g[gy]
+                for gx in range(gx0, gx1 + 1):
+                    if inside((gx + 0.5) / DETAIL - 0.5, py):
+                        row[gx] = ch
+            return
+        step = 1.0 / (DETAIL * 1.3)
+        g, mp = self.g, self._map
+        y = y0
+        while y <= y1:
+            x = x0
+            while x <= x1:
+                if inside(x, y):
+                    wx, wy = mp(x, y)
+                    gx = int((wx + 0.5) * DETAIL)
+                    gy = int((wy + 0.5) * DETAIL)
+                    if wx >= -0.5 and wy >= -0.5 and gx < GRID_W and gy < GRID_H:
+                        g[gy][gx] = ch
+                x += step
+            y += step
+
+    def recolor(self, x0: float, y0: float, x1: float, y1: float, inside, ch: str) -> None:
+        """Like a filled shape, but only over cells that are already part of
+        the cat (not empty, not outline): markings that cannot overhang."""
+        keep = [row[:] for row in self.g]
+        self._fill(x0, y0, x1, y1, inside, ch)
+        for y, (row, old) in enumerate(zip(self.g, keep)):
+            for x, prev in enumerate(old):
+                if row[x] != prev and prev in ".o":
+                    row[x] = prev
 
     def rect(self, x0: float, y0: float, x1: float, y1: float, ch: str) -> None:
         for y in range(int(round(y0)), int(round(y1)) + 1):
@@ -136,64 +223,103 @@ class Canvas:
                 self.set(x, y, ch)
 
     def ellipse(self, cx: float, cy: float, rx: float, ry: float, ch: str) -> None:
-        for y in range(int(cy - ry - 1), int(cy + ry + 2)):
-            for x in range(int(cx - rx - 1), int(cx + rx + 2)):
-                if ((x - cx) / max(rx, 0.1)) ** 2 + ((y - cy) / max(ry, 0.1)) ** 2 <= 1.0:
-                    self.set(x, y, ch)
+        rx, ry = max(rx, 0.1), max(ry, 0.1)
+        self._fill(cx - rx - 1, cy - ry - 1, cx + rx + 1, cy + ry + 1,
+                   lambda x, y: ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0, ch)
 
     def disc(self, cx: float, cy: float, r: float, ch: str) -> None:
         self.ellipse(cx, cy, r, r, ch)
 
     def thick_line(self, x0: float, y0: float, x1: float, y1: float, r: float, ch: str) -> None:
-        steps = max(abs(x1 - x0), abs(y1 - y0), 1) * 2
-        for i in range(int(steps) + 1):
-            t = i / steps
-            self.disc(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, r, ch)
+        """A capsule from (x0, y0) to (x1, y1) with radius r."""
+        dx, dy = x1 - x0, y1 - y0
+        ll = dx * dx + dy * dy
+
+        def inside(x: float, y: float) -> bool:
+            t = 0.0 if ll == 0 else max(0.0, min(1.0, ((x - x0) * dx + (y - y0) * dy) / ll))
+            ex, ey = x - (x0 + dx * t), y - (y0 + dy * t)
+            return ex * ex + ey * ey <= r * r
+
+        self._fill(min(x0, x1) - r - 1, min(y0, y1) - r - 1,
+                   max(x0, x1) + r + 1, max(y0, y1) + r + 1, inside, ch)
+
+    def curve(self, pts: list[tuple[float, float]], r0: float, r1: float, ch: str) -> None:
+        """A tapered stroke along a polyline: radius r0 at the start, r1 at
+        the end (tails)."""
+        n = len(pts) - 1
+        for i in range(n):
+            ra = r0 + (r1 - r0) * i / n
+            rb = r0 + (r1 - r0) * (i + 1) / n
+            self.thick_line(*pts[i], *pts[i + 1], (ra + rb) / 2, ch)
 
     def triangle(self, x0, y0, x1, y1, x2, y2, ch: str) -> None:
-        xs, ys = [x0, x1, x2], [y0, y1, y2]
-        for y in range(int(min(ys)), int(max(ys)) + 1):
-            for x in range(int(min(xs)), int(max(xs)) + 1):
-                den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
-                if den == 0:
-                    continue
-                a = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den
-                b = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / den
-                cc = 1 - a - b
-                if a >= 0 and b >= 0 and cc >= 0:
-                    self.set(x, y, ch)
+        den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if den == 0:
+            return
+
+        def inside(x: float, y: float) -> bool:
+            a = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den
+            b = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / den
+            return a >= 0 and b >= 0 and 1 - a - b >= 0
+
+        self._fill(min(x0, x1, x2), min(y0, y1, y2), max(x0, x1, x2), max(y0, y1, y2),
+                   inside, ch)
+
+    # -- finishing ----------------------------------------------------------------
+
+    def _masks(self, pred) -> list[int]:
+        """One int bitmask per row: bit x set where pred(char) holds."""
+        out = []
+        for row in self.g:
+            m = 0
+            for x, ch in enumerate(row):
+                if pred(ch):
+                    m |= 1 << x
+            out.append(m)
+        return out
 
     def auto_outline(self) -> None:
+        """One-cell outline around everything drawn so far (8-neighborhood),
+        computed with row bitmasks (dilate the filled mask by one cell)."""
         self._heal()  # close warp tears first, or they get outlined (P47)
-        add = []
-        for y in range(CANVAS_H):
-            for x in range(CANVAS_W):
-                if self.g[y][x] != ".":
-                    continue
-                for dy in (-1, 0, 1):
-                    for dx in (-1, 0, 1):
-                        nx, ny = x + dx, y + dy
-                        if 0 <= nx < CANVAS_W and 0 <= ny < CANVAS_H and self.g[ny][nx] != ".":
-                            add.append((x, y))
-                            dx, dy = 99, 99  # break both loops
-                            break
-        for x, y in add:
-            self.g[y][x] = "o"
+        full = (1 << GRID_W) - 1
+        filled = self._masks(lambda ch: ch != ".")
+        wide = [(m | (m << 1) | (m >> 1)) & full for m in filled]
+        for y, row in enumerate(self.g):
+            grown = wide[y]
+            if y > 0:
+                grown |= wide[y - 1]
+            if y < GRID_H - 1:
+                grown |= wide[y + 1]
+            ring = grown & ~filled[y]
+            while ring:
+                low = ring & -ring
+                row[low.bit_length() - 1] = "o"
+                ring ^= low
 
     def _heal(self) -> None:
-        """Fill isolated 1px holes: the growth-stage warp maps integer cells
-        with rounding, which can tear small features (pupil, nose). A hole
-        with 3+ orthogonal neighbors of the same color takes that color."""
-        for y in range(1, CANVAS_H - 1):
-            for x in range(1, CANVAS_W - 1):
-                if self.g[y][x] != ".":
+        """Fill isolated 1-cell holes: the growth-stage warp maps with
+        rounding, which can tear small features (pupil, nose). A hole with
+        3+ orthogonal neighbors of the same color takes that color."""
+        full = (1 << GRID_W) - 1
+        empty = self._masks(lambda ch: ch == ".")
+        for ch in ("e", "n", "f", "F", "b", "a"):
+            m = self._masks(lambda c, ch=ch: c == ch)
+            for y in range(1, GRID_H - 1):
+                holes = empty[y]
+                if not holes:
                     continue
-                nb = (self.g[y - 1][x], self.g[y + 1][x],
-                      self.g[y][x - 1], self.g[y][x + 1])
-                for ch in ("e", "n", "f", "F", "b", "a"):
-                    if nb.count(ch) >= 3:
-                        self.g[y][x] = ch
-                        break
+                a, b = m[y - 1], m[y + 1]
+                c, d = (m[y] << 1) & full, m[y] >> 1
+                three = (a & b & c) | (a & b & d) | (a & c & d) | (b & c & d)
+                fill = holes & three & ~1 & ~(1 << (GRID_W - 1))
+                if fill:
+                    empty[y] &= ~fill
+                    row = self.g[y]
+                    while fill:
+                        low = fill & -fill
+                        row[low.bit_length() - 1] = ch
+                        fill ^= low
 
     def rows(self) -> list[str]:
         self._heal()  # face details are drawn after auto_outline: heal again
@@ -206,29 +332,35 @@ class Canvas:
 
 def draw_eye(c: Canvas, x: float, y: float, closed: bool = False,
              lid: bool = False) -> None:
+    """Eye at pose (x, y) (top-left of the old 4x6 iris box)."""
     if closed:
-        c.rect(x, y + 2, x + 4, y + 2, "F")      # contented closed eye: slit
-        c.set(x + 1, y + 3, "F")
-        c.set(x + 3, y + 3, "F")
+        # contented closed eye: a soft downward arc, two cells thick
+        for off in (0.0, 0.45):
+            c.fine_line(x - 0.2, y + 2.2 + off, x + 1.8, y + 3.3 + off, "F")
+            c.fine_line(x + 1.8, y + 3.3 + off, x + 3.8, y + 2.2 + off, "F")
     elif lid:
-        c.rect(x, y, x + 3, y + 2, "F")          # heavy upper lid (half-mast)
-        c.rect(x, y + 3, x + 3, y + 5, "e")      # iris peeking out below
-        c.rect(x + 2, y + 4, x + 3, y + 5, "o")  # pupil sliver
+        c.ellipse(x + 1.6, y + 2.8, 2.1, 2.7, "e")   # iris
+        c.ellipse(x + 2.3, y + 3.4, 0.7, 1.6, "o")   # pupil
+        c.ellipse(x + 1.6, y + 0.9, 2.6, 2.0, "f")   # heavy upper lid (half-mast)
+        c.fine_line(x - 0.6, y + 2.4, x + 1.6, y + 2.9, "o")  # lid line
+        c.fine_line(x + 1.6, y + 2.9, x + 3.9, y + 2.4, "o")
     else:
-        c.rect(x, y, x + 3, y + 5, "e")          # iris 4x6
-        c.rect(x + 2, y + 1, x + 3, y + 4, "o")  # pupil
-        c.set(x, y, "w")                         # shine
-        c.set(x + 1, y + 1, "w")
+        c.ellipse(x + 1.6, y + 2.5, 2.1, 3.0, "e")   # iris
+        c.ellipse(x + 2.3, y + 2.6, 0.8, 2.3, "o")   # vertical slit pupil
+        c.fine(x + 0.6, y + 0.8, "w")                # glint
+        c.fine(x + 1.1, y + 0.8, "w")
+        c.fine(x + 0.6, y + 1.3, "w")
+        c.fine(x + 2.9, y + 4.3, "w")                # small lower catchlight
 
 
 def draw_whiskers(c: Canvas, hx: float, hy: float) -> None:
-    """Relaxed whiskers: two fine lines from the muzzle, arcing gently
-    DOWNWARD (research: relaxed cat whiskers droop). Drawn after auto_outline
-    so they stay thin 'w' lines, not a blob."""
-    for i in range(5):
-        c.set(hx + 11.5 + i, hy + 1.6 + i * 0.45, "w")   # upper line, slight droop
-    for i in range(4):
-        c.set(hx + 11.5 + i, hy + 3.4 + i * 0.6, "w")    # lower line, more droop
+    """Relaxed whiskers: two fine lines growing out of the whisker pad on
+    the muzzle and arcing gently DOWNWARD (relaxed cat whiskers droop).
+    Drawn after auto_outline so they stay one-cell lines."""
+    c.fine_line(hx + 8.6, hy + 2.3, hx + 12.0, hy + 2.9, "w")
+    c.fine_line(hx + 12.0, hy + 2.9, hx + 16.2, hy + 4.3, "w")
+    c.fine_line(hx + 8.6, hy + 3.7, hx + 11.6, hy + 4.7, "w")
+    c.fine_line(hx + 11.6, hy + 4.7, hx + 15.0, hy + 6.6, "w")
 
 
 def draw_ears(c: Canvas, hx: float, hy: float, back_dx: int = -7, front_dx: int = 3) -> None:
@@ -238,35 +370,48 @@ def draw_ears(c: Canvas, hx: float, hy: float, back_dx: int = -7, front_dx: int 
     c.head_zone(hx, hy)
     c.triangle(hx + back_dx - 2, hy - 3, hx + back_dx + 2, hy - 15, hx + back_dx + 5, hy - 3, "f")
     c.triangle(hx + front_dx - 2, hy - 3, hx + front_dx + 3, hy - 15, hx + front_dx + 7, hy - 3, "f")
-    # inner ears
-    c.set(hx + back_dx + 2, hy - 9, "n")
-    c.set(hx + back_dx + 2, hy - 8, "n")
-    c.set(hx + back_dx + 1, hy - 7, "n")
-    c.set(hx + front_dx + 3, hy - 9, "n")
-    c.set(hx + front_dx + 3, hy - 8, "n")
-    c.set(hx + front_dx + 4, hy - 7, "n")
+    # inner ears: small pink triangles following the ear shape
+    c.triangle(hx + back_dx - 0.3, hy - 5, hx + back_dx + 2, hy - 11.5,
+               hx + back_dx + 3.4, hy - 5, "n")
+    c.triangle(hx + front_dx + 0.2, hy - 5, hx + front_dx + 3, hy - 11.5,
+               hx + front_dx + 5.0, hy - 5, "n")
 
 
 def draw_collar(c: Canvas, hx: float, hy: float) -> None:
-    """Accessory collar ('a' slot) at the neck + tiny white bell ('w')."""
-    for x in range(int(hx - 6), int(hx + 10)):
-        for y in range(int(hy + 5.6), int(hy + 8.6)):
-            if c.get(x, y) != ".":
-                c.set(x, y, "a")
-    if c.get(int(hx + 2), int(hy + 9.6)) != ".":
-        c.set(hx + 2, hy + 9.6, "w")  # bell
+    """Accessory collar ('a' slot): a band that curves with the neck, only
+    on cells the cat already covers, plus a tiny bell ('w')."""
+    def band(x: float, y: float) -> bool:
+        mid = hy + 6.8 + 0.05 * (x - hx) ** 2 / 4.0   # sags toward the chest
+        return abs(y - mid) <= 1.3
+
+    c.recolor(hx - 7, hy + 4.5, hx + 10, hy + 10.5, band, "a")
+    if c.get(hx + 2, hy + 9.6) not in ".o":
+        c.disc(hx + 2, hy + 9.4, 0.9, "w")  # bell
 
 
 def draw_tail(c: Canvas, x0: float, y0: float, tip: tuple[float, float]) -> None:
-    """Tail from body rear to tip, with shade stripes near the tip."""
-    c.thick_line(x0, y0, tip[0], tip[1], 2.5, "f")
-    c.disc(tip[0], tip[1], 3.0, "f")
-    # two darker rings near the tip (classic tabby tail)
-    t1x = x0 + (tip[0] - x0) * 0.75
-    t1y = y0 + (tip[1] - y0) * 0.75
-    c.disc(t1x, t1y, 2.2, "F")
-    c.disc(tip[0], tip[1], 1.8, "F")
-    c.disc(tip[0], tip[1], 1.1, "f")
+    """Tail from the body rear to the tip: a gently bowed, tapering curve
+    (quadratic Bezier, bowing upward) with shade rings near the tip."""
+    tx, ty = tip
+    dx, dy = tx - x0, ty - y0
+    length = (dx * dx + dy * dy) ** 0.5 or 1.0
+    px, py = -dy / length, dx / length          # a perpendicular...
+    if py > 0:
+        px, py = -px, -py                       # ...that points upward
+    bow = 0.16 * length
+    cx, cy = (x0 + tx) / 2 + px * bow, (y0 + ty) / 2 + py * bow
+
+    def at(t: float) -> tuple[float, float]:
+        u = 1 - t
+        return (u * u * x0 + 2 * u * t * cx + t * t * tx,
+                u * u * y0 + 2 * u * t * cy + t * t * ty)
+
+    c.curve([at(i / 10) for i in range(11)], 2.7, 2.1, "f")
+    c.disc(tx, ty, 2.7, "f")
+    rx, ry = at(0.75)
+    c.disc(rx, ry, 2.2, "F")                    # classic tabby ring
+    c.disc(tx, ty, 1.8, "F")
+    c.disc(tx, ty, 1.0, "f")
 
 
 def draw_paws(c: Canvas, xs: list[float]) -> None:
@@ -298,11 +443,11 @@ def leg_hind(c: Canvas, x: float, top: float, ch: str, lift: float = 0,
 
 
 def draw_muzzle(c: Canvas, hx: float, hy: float) -> None:
-    """Nose + philtrum + mouth on the snout edge (research: small inverted
-    triangle with a short line down to the mouth). Drawn after auto_outline."""
-    c.set(hx + 10.4, hy + 2.4, "n")  # nose tip at the silhouette edge
-    c.set(hx + 10.4, hy + 3.4, "o")  # philtrum
-    c.set(hx + 9.6, hy + 4.2, "o")   # mouth corner
+    """Nose + philtrum + mouth on the snout edge (small inverted triangle
+    with a short line down to the mouth). Drawn after auto_outline."""
+    c.set(hx + 10.4, hy + 2.4, "n")                             # nose tip
+    c.fine_line(hx + 10.6, hy + 3.1, hx + 10.6, hy + 3.8, "o")  # philtrum
+    c.fine_line(hx + 10.6, hy + 3.9, hx + 9.4, hy + 4.5, "o")   # mouth corner
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +699,7 @@ def pose_crouch(lash: int = 0) -> list[str]:
     return c.rows()
 
 
-def pose_loaf(phase: int = 0, collar: bool = False) -> list[str]:
+def pose_loaf(phase: int = 0, collar: bool = False, eyes_closed: bool = False) -> list[str]:
     """The loaf: all four paws tucked under, a content dome of cat. The tail
     wraps around the side; its tip flicks up on phase 1."""
     c = Canvas()
@@ -570,7 +715,7 @@ def pose_loaf(phase: int = 0, collar: bool = False) -> list[str]:
     c.disc(hx + 8.5, hy + 4.5, 2.0, "f")  # cheek fluff
     c.ellipse(cx + 10, cy + 2, 6.0, 4.0, "b")  # chest hint
     c.auto_outline()
-    draw_eye(c, hx + 4.0, hy - 2.0, lid=True)  # drowsy half-mast
+    draw_eye(c, hx + 4.0, hy - 2.0, lid=not eyes_closed, closed=eyes_closed)
     draw_muzzle(c, hx, hy)
     draw_whiskers(c, hx, hy)
     if collar:
@@ -964,6 +1109,8 @@ def _build_table(collar: bool = False) -> dict[str, list[list[str]]]:
         "jump": [pose_stand(stretch=1.5, tail_tip=(7.0, 22.0), collar=collar)],
         "sit": [pose_sit(collar=collar), pose_sit(tail_wave=1, collar=collar)],
         "sit_blink": [pose_sit(eye_closed=True, collar=collar)],
+        "stand_blink": [pose_stand(eye_closed=True, collar=collar)],
+        "loaf_blink": [pose_loaf(0, collar=collar, eyes_closed=True)],
         "beg": [pose_sit(paw_up=True, collar=collar),
                pose_sit(paw_up=True, tail_wave=1, collar=collar)],
         "groom": [pose_groom(0), pose_groom(1)],
@@ -1025,8 +1172,6 @@ def _build(collar: bool = False, stage: int = 6) -> dict[str, list[list[str]]]:
         _PROFILE = old
 
 
-SPRITES: dict[str, list[list[str]]] = _build(collar=False)
-_COLLARED = _build(collar=True)
 
 
 def _diff_layers(base: dict, collared: dict) -> dict[str, list[list[str]]]:
@@ -1042,12 +1187,52 @@ def _diff_layers(base: dict, collared: dict) -> dict[str, list[list[str]]]:
     return out
 
 
-ACCESSORIES: dict[str, list[list[str]]] = _diff_layers(SPRITES, _COLLARED)
 
 # Per-stage tables, built and cached on first use (P47). Stage 6 is served
 # from the shared SPRITES/ACCESSORIES above (byte-identical legacy art).
 _SPRITES_BY_STAGE: dict[int, dict[str, list[list[str]]]] = {}
 _ACCESSORIES_BY_STAGE: dict[int, dict[str, list[list[str]]]] = {}
+
+
+def _cache_file(stage: int):
+    """Disk cache for a stage's tables, keyed by this generator's source:
+    any change to the art code invalidates it automatically."""
+    import hashlib
+    import os
+    from pathlib import Path
+    base = os.environ.get("PLASMACAT_CACHE_DIR") or os.path.join(
+        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+        "plasmacat", "sprites")
+    key = hashlib.sha1(Path(__file__).read_bytes()).hexdigest()[:12]
+    return Path(base) / f"stage{stage}-{key}.json.gz"
+
+
+def _load_stage(stage: int):
+    import gzip
+    import json
+    f = _cache_file(stage)
+    try:
+        with gzip.open(f, "rt", encoding="ascii") as fh:
+            d = json.load(fh)
+        return d["sprites"], d["accessories"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _store_stage(stage: int, base: dict, acc: dict) -> None:
+    import gzip
+    import json
+    f = _cache_file(stage)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        for old in f.parent.glob(f"stage{stage}-*.json.gz"):
+            old.unlink(missing_ok=True)   # outdated generator versions
+        tmp = f.with_suffix(".tmp")
+        with gzip.open(tmp, "wt", encoding="ascii", compresslevel=6) as fh:
+            json.dump({"sprites": base, "accessories": acc}, fh)
+        tmp.replace(f)
+    except OSError:
+        pass  # a read-only cache dir only costs build time
 
 
 def sprites_for(stage: int) -> dict[str, list[list[str]]]:
@@ -1056,10 +1241,29 @@ def sprites_for(stage: int) -> dict[str, list[list[str]]]:
     if s == 6:
         return SPRITES
     if s not in _SPRITES_BY_STAGE:
-        base = _build(collar=False, stage=s)
+        cached = _load_stage(s)
+        if cached is None:
+            base = _build(collar=False, stage=s)
+            acc = _diff_layers(base, _build(collar=True, stage=s))
+            _store_stage(s, base, acc)
+        else:
+            base, acc = cached
         _SPRITES_BY_STAGE[s] = base
-        _ACCESSORIES_BY_STAGE[s] = _diff_layers(base, _build(collar=True, stage=s))
+        _ACCESSORIES_BY_STAGE[s] = acc
     return _SPRITES_BY_STAGE[s]
+
+
+def _adult_tables():
+    cached = _load_stage(6)
+    if cached is not None:
+        return cached
+    base = _build(collar=False)
+    acc = _diff_layers(base, _build(collar=True))
+    _store_stage(6, base, acc)
+    return base, acc
+
+
+SPRITES, ACCESSORIES = _adult_tables()
 
 
 def accessories_for(stage: int) -> dict[str, list[list[str]]]:
@@ -1071,41 +1275,8 @@ def accessories_for(stage: int) -> dict[str, list[list[str]]]:
     return _ACCESSORIES_BY_STAGE[s]
 
 
-# ---------------------------------------------------------------------------
-# Patterns (customization): rewrite fur pixels after building
-# ---------------------------------------------------------------------------
-
-def apply_pattern(frame: list[str], pattern: str) -> list[str]:
-    """pattern: 'solid' | 'tabby' | 'tuxedo' | 'spots' | 'tortie'.
-    Rewrites 'f' cells."""
-    if pattern == "solid":
-        return frame
-    grid = [list(row) for row in frame]
-    rows_with_f = [y for y, row in enumerate(grid) if "f" in row]
-    if not rows_with_f:
-        return frame
-    y_top, y_bot = min(rows_with_f), max(rows_with_f)
-    span = max(y_bot - y_top, 1)
-    for y in range(CANVAS_H):
-        for x in range(CANVAS_W):
-            if grid[y][x] != "f":
-                continue
-            rel_y = (y - y_top) / span
-            if pattern == "tabby":
-                if rel_y < 0.45 and x % 12 in (0, 1, 2):  # vertical stripes on the back
-                    grid[y][x] = "F"
-            elif pattern == "spots":
-                if (x * 7 + y * 13) % 29 in (0, 1, 2, 3):  # deterministic pseudo-random spots
-                    grid[y][x] = "F"
-            elif pattern == "tortie":
-                # tortoiseshell: big mottled shade patches (coarse cell noise)
-                h = ((x // 10) * 31 + (y // 10) * 17) % 13
-                if h < 5:
-                    grid[y][x] = "F"
-            elif pattern == "tuxedo":
-                if rel_y > 0.6 or (rel_y > 0.4 and x > CANVAS_W * 0.6):  # belly+chest white
-                    grid[y][x] = "b"
-    return ["".join(r) for r in grid]
+# Patterns live in cat/patterns.py (re-exported for existing callers)
+from plasmacat.cat.patterns import apply_pattern  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------
@@ -1115,9 +1286,9 @@ def apply_pattern(frame: list[str], pattern: str) -> list[str]:
 def validate(table: dict[str, list[list[str]]] | None = None) -> None:
     for name, frames in (SPRITES if table is None else table).items():
         for frame in frames:
-            assert len(frame) == CANVAS_H, f"{name}: {len(frame)} rows != {CANVAS_H}"
+            assert len(frame) == GRID_H, f"{name}: {len(frame)} rows != {GRID_H}"
             for row in frame:
-                assert len(row) == CANVAS_W, f"{name}: row {len(row)} != {CANVAS_W}: {row!r}"
+                assert len(row) == GRID_W, f"{name}: row {len(row)} != {GRID_W}: {row!r}"
                 bad = set(row) - set(DEFAULT_PALETTE) - {"."}
                 assert not bad, f"{name}: unknown chars {bad}"
 
@@ -1132,7 +1303,7 @@ def sprite_to_pixels(frame: list[str], palette: dict[str, tuple[int, int, int]])
             else:
                 r, g, b = palette[ch]
                 out.append((r, g, b, 255))
-    return CANVAS_W, CANVAS_H, out
+    return GRID_W, GRID_H, out
 
 
 def flip(frame: list[str]) -> list[str]:

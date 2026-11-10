@@ -6,7 +6,8 @@ import random
 
 from plasmacat.bridge.desktop import DesktopState
 from plasmacat.cat.animations import ANIMATIONS
-from plasmacat.cat.brain import Brain, Household
+from plasmacat.cat.brain import Brain
+from plasmacat.cat.household import Household
 from plasmacat.cat.physics import WALK_SPEED, CatBody
 from plasmacat.persist import Customization
 
@@ -42,7 +43,7 @@ class Cat:
             self._blink_left -= dt
             return
         self._blink_countdown -= dt
-        if self._blink_countdown <= 0 and self.anim_state in ("stand", "sit"):
+        if self._blink_countdown <= 0 and self.anim_state in ("stand", "sit", "loaf"):
             self._blink_left = 0.16
             self._blink_countdown = self._rng.uniform(3.0, 7.0)
 

@@ -1,129 +1,105 @@
-# PlasmaCat — a pixel-art desktop companion cat for KDE Plasma
+# PlasmaCat
 
-A cute retro pixel-art cat that lives on your desktop: she walks and jumps on
-top of your real application windows, treats them as walls, chases and hunts
-your cursor, snuggles with it, sleeps, eats, uses the litter box — and grows
-attached to you over time.
+A pixel-art desktop companion cat for **KDE Plasma 6 (Wayland)**. She walks
+and jumps on top of your real windows, naps on the furniture you give her,
+hunts your cursor, needs food, water, play and love — and grows from a kitten
+into a grey old lady while you work.
 
-![PlasmaCat on a real desktop — two cats on a wall shelf and cat tree, with food bowl, water fountain and scratching post on the desktop layer behind the windows](docs/screenshot.png)
+![Three cats at home: one on a wall shelf, one on the cat tree, a kitten next to the bed, with food bowl, fountain, scratching post and litter box](docs/screenshot.png)
 
-![PlasmaCat sprite sheet](docs/sprite_sheet_64.png)
-
-## What she does
-
-- **Lives on your desktop and your windows**: jumps onto visible window tops,
-  naps there, on wall shelves you place, or in her cat bed. Two visibility
-  levels (in front of windows / on the desktop behind them) with a cat door
-  animation when she crosses between them.
-- **Real cat behavior**: needs (hunger, thirst, energy, play, affection,
-  bladder), a pre-sleep ritual, yawn + stretch after naps, kneading, loafing,
-  slow-blink "cat kisses", butt wiggles before pounces, tail language by mood,
-  zoomies before the litter box, grooming and face washing, startles, and a
-  greeting when you come back. Cats are crepuscular — she's most active at
-  dawn and dusk.
-- **Interacts with your cursor like it's your hand**: petting (strokes),
-  head rubs, tail snuggle, hunting and pouncing, paw bats when you tease her,
-  and she'll follow you around politely. Neglect her for hours and she eats
-  from boredom until she vomits on your desktop (clean it up via the tray).
-- **Attachment progression**: from stray to inseparable. High-trust cats
-  sleep belly-up and bring you "gifts" (carries the plush mouse to your
-  cursor).
-- **Raise her from a kitten**: cats age through 16 growth stages (0 kitten …
-  15 very old) — the sprite proportions change with every stage (big kitten
-  head, greying seniors). Good food and sleep slow the clock down, playing
-  and petting keep her young longer, and a neglected cat ages faster.
-- **Multi-cat household**: tray "Add kitten…" brings home up to 4 cats —
-  each with her own look, needs and personality, all sharing the same bowls,
-  furniture and litter box. And they have a social life: they cuddle up
-  loaf-to-loaf (hearts included), chase each other across the desktop
-  (roles flip on a catch), have the occasional spat, and prefer napping
-  next to each other. The status board, treats and control mode follow
-  the cat nearest your cursor.
-- **Customizable**: first-run wizard for name, fur color, pattern (solid,
-  tabby, tuxedo, spots, tortie), eyes and collar — recolorable anytime.
-- **Stuff to play with**: ball (bouncy physics), plush mouse, string — and a
-  **laser pointer**: a red dot follows your cursor; she chases, wiggles and
-  pounces but never truly catches it (great for luring her to a spot). Plus
-  furniture: scratching post, cat bed, cat grass, litter box (every poop and
-  pee shows as its own little pile — you empty it), big cat tree, exercise
-  wheel, floating wall shelves, and a cardboard box she hides in to ambush you.
-- **Food & water**: food bowl with a little shop (Kibble/Tuna/Milk/Catnip —
-  she likes them differently), and a perpetual water fountain that never
-  runs dry.
-- **Sound**: real cat recordings only — meows, purring, eating, drinking,
-  scratching and more (see `assets/sounds/natural/ATTRIBUTION.md`), mute +
-  volume in the tray.
-- **Status board**: an optional pinned panel painted on the desktop level
-  (behind your windows, never in the way, can't get lost) with all need
-  bars — toggle and position it from the tray, it remembers its place.
-- **Control mode + mini-games**: take the wheel yourself — toggle "Control
-  cat" in the tray and steer her with WASD or the arrow keys (jump: Up/W/
-  Space, halt: Down/S). First mini-game built on it: **mouse hunt** (60
-  seconds, up to 8 scurrying mice — corner them and catch them by touch;
-  she also hunts them on her own).
-
-## Requirements
-
-- KDE Plasma 6 on **Wayland** (developed on Fedora 44, Plasma 6.7.3)
-- Python 3.10+
-
-## Install & run
+## Install
 
 ```bash
 git clone https://github.com/sunsetterphoto/plasmacat.git
 cd plasmacat
-python3 -m venv .venv
-.venv/bin/pip install PySide6-Essentials PySide6-Addons
-./run.sh
+./install.sh
 ```
 
-(pillow is only needed for the sprite-art dev tool:
-`.venv/bin/pip install pillow` before `tools/render_sheet.py`.)
+That's it — PlasmaCat is now in your app menu. `install.sh` needs no root:
+it puts the newest release into `~/.local/share/plasmacat/app`, adds the
+launcher and icons, and sets up a daily update check.
 
-The first run opens the customization wizard. State is saved every 30 s to
-`~/.local/share/catgame/save.json` (needs decay while you're away).
+**Requirements:** KDE Plasma 6 on Wayland, Python 3.10+, git and PySide6 —
+on Fedora `sudo dnf install python3-pyside6` (other distros: your
+`python3-pyside6` package, or `pip install PySide6`).
 
-Everything is driven from the **system tray icon**: needs status, give treat,
-toys, bowls, food shop, furniture, sound, status board, control mode, games,
-start at login, customize, reset, quit.
+**Updates:** once a day (and at start) PlasmaCat asks GitHub for a new
+release. If there is one, you get a notification — click it (or
+*System → Update to vX* in the Control Center) and PlasmaCat updates and
+restarts itself. Nothing is installed without your click; the check can be
+switched off in the System tab.
 
-Optional app launcher for your menu (edit the `Exec=` path first):
-```bash
-sed -i "s|^Exec=.*|Exec=$PWD/run.sh|" plasmacat.desktop
-cp plasmacat.desktop ~/.local/share/applications/
-# and the icon (regenerable via tools/make_icon.py):
-for s in 256 128 64 48 32 22 16; do
-  mkdir -p ~/.local/share/icons/hicolor/${s}x${s}/apps
-  cp assets/icons/plasmacat-${s}.png ~/.local/share/icons/hicolor/${s}x${s}/apps/plasmacat.png
-done
-```
+**Uninstall:** `./uninstall.sh` (keeps your cats) or `./uninstall.sh --purge`.
 
-If the app crashed and left the KWin helper script behind:
-```bash
-./run.sh --unload-bridge
-```
+## Using it
+
+- **Left-click the tray icon** to open the **Control Center**. The tray menu
+  itself only has quick actions: treat, toys, pause, sound, quit.
+- **Pet her** by moving your cursor *slowly* over her; linger at her head for
+  a head rub. Fast, erratic movements make her hunt your cursor.
+- Start with a **food bowl** and a **water fountain** (Control Center →
+  Home), then add furniture.
+
+### The Control Center
+
+| Tab | What's there |
+|---|---|
+| **Cats** | A card per cat: life stage, bond, all needs at a glance; give a treat, change her look, add a kitten (up to four), rehome a cat. |
+| **Play** | Ball and plush mouse, string, laser pointer, the 60-second mouse hunt, and steering a cat yourself (WASD / arrows — keys are only grabbed while this is on). |
+| **Home** | Place furniture; move or remove every piece separately — or *Arrange on the desktop*: click a piece to pick it up, Del removes it. Food shop, refill, cleaning. The optional status board behind your windows, with every row switchable. |
+| **Sound** | Volume, and each sound group on its own (voices, purring, eating & fountain, toys, alerts) with a sample button. |
+| **System** | Start at login, pixel size (fine / normal / chunky), hide the cats while a window is fullscreen, notifications per type, updates, start over. |
+
+Every tab has its own **Reset to defaults**.
+
+## What she does
+
+- **Lives on your desktop and your windows**: hops onto visible window tops
+  (and stays put when their titles change), treats window sides as walls,
+  naps on shelves, in her bed or the cardboard box. Furniture lives behind
+  your windows; a little cat door appears when she switches levels.
+- **Real cat behavior**: hunger, thirst, energy, play, affection and the
+  litter box; a pre-sleep ritual, yawning and stretching, kneading, loafing,
+  slow-blink "cat kisses", butt wiggles before a pounce, tail language by
+  mood, zoomies, grooming. Cats are crepuscular — busiest at dawn and dusk.
+- **Growing up**: 16 life stages from kitten to senior; good care slows the
+  clock down, neglect speeds it up.
+- **A household**: up to four cats with their own looks and personalities.
+  They cuddle, chase each other, have the occasional hissy spat, and like to
+  nap together.
+- **Looks**: name, fur color, coat (solid, tabby, tuxedo, spotted,
+  tortoiseshell), eye color and collar — all sprites are drawn in code, so
+  every pose recolors.
+- **Sound**: real cat recordings (see
+  [ATTRIBUTION](src/plasmacat/data/sounds/ATTRIBUTION.md)); the fountain only
+  bubbles quietly.
+- **Stays out of the way**: hides during fullscreen video and games, can be
+  paused from the tray.
+
+![Sprite sheet: poses in five coat patterns](docs/sprites.png)
 
 ## How it works
 
-- A small transparent, click-through window follows the cat above all windows
-  (Wayland apps can't self-position, so the KWin script places it via a rect
-  encoded in the window title); one fullscreen layer per screen behind all
-  windows holds the furniture. Multi-monitor aware. A tiny persistent KWin
-  helper script (`kwin/plasmacat-bridge.js`) streams the cursor position,
-  window geometries and the per-screen work areas to the app over DBus.
-- The game logic (brain, physics, sprites, sounds) is pure Python and covered
-  by a headless simulation test:
-  ```bash
-  PYTHONPATH=src .venv/bin/python tools/sim_test.py   # must end with SIM_TEST_OK
-  ```
-- Sprites are generated procedurally in code (`src/plasmacat/cat/sprites.py`),
-  so every pose recolors for free. Sounds are real recordings
-  (`assets/sounds/natural/`).
+A Python/PySide6 app plus a small KWin script. Wayland apps can't see the
+cursor or other windows, so the script streams cursor position, window
+geometry and the screens' floor lines to the app over DBus, and positions the
+cat's small, click-through window. Details in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-See `PLAN.md` (design) and `DECISIONS.md` (measured facts & trade-offs) for
-the architecture.
+### Development
+
+```bash
+./install.sh --dev          # run this checkout from the app menu (no auto-update)
+./run.sh --debug            # or start it directly
+python3 -m pytest           # the test suite (headless)
+node --test tests/*.test.mjs          # the KWin script tests
+PYTHONPATH=src python3 tools/render_sheet.py   # sprite review sheet
+```
+
+If the app was killed hard and left the KWin script behind:
+`./run.sh --unload-bridge`.
 
 ## License
 
-MIT (see `LICENSE`). Sound recordings in `assets/sounds/natural/` have their
-own licenses — see `assets/sounds/natural/ATTRIBUTION.md`.
+MIT (see [LICENSE](LICENSE)). The sound recordings have their own licenses —
+see [ATTRIBUTION](src/plasmacat/data/sounds/ATTRIBUTION.md).

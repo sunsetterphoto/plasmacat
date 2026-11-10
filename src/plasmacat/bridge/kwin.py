@@ -1,19 +1,20 @@
 """Bridge to KWin: loads the helper KWin script and hosts the DBus service it calls.
 
-The KWin script (kwin/plasmacat-bridge.js) pushes data to us via callDBus:
+The KWin script (plasmacat/data/kwin/bridge.js) pushes data to us via callDBus:
   SetCursor("x,y")       -> cursorChanged(int, int)     (~30 Hz while moving)
-  SetWindows("[...]")    -> windowsChanged(list[dict])  (on any window change)
+  SetWindows("[...]")    -> windowsChanged(list[dict])  ({id,x,y,w,h}, coalesced)
   SetWorkAreas("[...]")  -> workAreasChanged(list[dict]) (one work area per screen, P38)
-  SetWorkArea("{...}")   -> workAreaChanged(dict)       (legacy single-area form)
+  SetActiveFullscreen("1") -> fullscreenChanged(bool)   (active window is fullscreen)
   OverlayTagged("...")   -> overlayTagged(str)          (our overlay got keepAbove etc.)
   KeyEvent("left")       -> keyEvent(str)               (P42 control-mode shortcuts)
+  Activate("")           -> activateRequested()         (a second launch asks us to show up)
 All DBus arguments are single strings (DECISIONS.md D3).
 
 IMPORTANT (DECISIONS.md D10): the DBus interface name QtDBus auto-generates for a
 Python QObject is NONDETERMINISTIC (seen: 'local.py.main.BridgeService',
 'local.plasmacat.BridgeService'). We therefore introspect ourselves at startup and
-inject the discovered name into the JS template (__CATGAME_IFACE__ placeholder),
-writing the concrete script to kwin/plasmacat-bridge.runtime.js.
+inject the discovered name into the JS template (__PLASMACAT_IFACE__ placeholder),
+writing the concrete script to $XDG_RUNTIME_DIR/plasmacat/bridge.js.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from PySide6.QtDBus import QDBusConnection, QDBusInterface
 SCRIPT_PLUGIN = "plasmacat-bridge"
 SERVICE = "org.plasmacat.Bridge"
 OBJPATH = "/Bridge"
-IFACE_PLACEHOLDER = "__CATGAME_IFACE__"
+IFACE_PLACEHOLDER = "__PLASMACAT_IFACE__"
 CONTROL_PLACEHOLDER = "__CONTROL_MODE__"  # P42: control-mode key shortcuts
 
 
@@ -37,10 +38,11 @@ class BridgeService(QObject):
 
     cursorChanged = Signal(int, int)
     windowsChanged = Signal(list)
-    workAreaChanged = Signal(dict)
     workAreasChanged = Signal(list)
     overlayTagged = Signal(str)
     keyEvent = Signal(str)  # P42: control-mode key from a KWin shortcut
+    activateRequested = Signal()  # a second launch wants the UI shown
+    fullscreenChanged = Signal(bool)
 
     @Slot(str)
     def SetCursor(self, csv: str) -> None:
@@ -57,16 +59,9 @@ class BridgeService(QObject):
         except json.JSONDecodeError:
             return
         if isinstance(data, list):
-            self.windowsChanged.emit(data)
-
-    @Slot(str)
-    def SetWorkArea(self, payload: str) -> None:
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            return
-        if isinstance(data, dict) and {"x", "y", "w", "h"} <= data.keys():
-            self.workAreaChanged.emit(data)
+            self.windowsChanged.emit([
+                w for w in data if isinstance(w, dict)
+                and all(isinstance(w.get(k), (int, float)) for k in ("x", "y", "w", "h"))])
 
     @Slot(str)
     def SetWorkAreas(self, payload: str) -> None:
@@ -80,12 +75,20 @@ class BridgeService(QObject):
             self.workAreasChanged.emit(data)
 
     @Slot(str)
+    def SetActiveFullscreen(self, flag: str) -> None:
+        self.fullscreenChanged.emit(flag.strip() == "1")
+
+    @Slot(str)
     def OverlayTagged(self, caption: str) -> None:
         self.overlayTagged.emit(caption)
 
     @Slot(str)
     def KeyEvent(self, payload: str) -> None:
         self.keyEvent.emit(payload)
+
+    @Slot(str)
+    def Activate(self, _payload: str) -> None:
+        self.activateRequested.emit()
 
 
 class KWinBridge(QObject):
@@ -97,10 +100,12 @@ class KWinBridge(QObject):
         self.service = BridgeService(self)
         self.cursorChanged = self.service.cursorChanged
         self.windowsChanged = self.service.windowsChanged
-        self.workAreaChanged = self.service.workAreaChanged
         self.workAreasChanged = self.service.workAreasChanged
         self.overlayTagged = self.service.overlayTagged
         self.keyEvent = self.service.keyEvent  # P42
+        self.activateRequested = self.service.activateRequested
+        self.fullscreenChanged = self.service.fullscreenChanged
+        self.error: str | None = None  # 'running' | 'kwin' after a failed start()
         self._scripting = QDBusInterface(
             "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"
         )
@@ -124,14 +129,18 @@ class KWinBridge(QObject):
                 break
             QThread.msleep(300)
         if not registered:
+            self.error = "running"
             return False
         bus.registerObject(
             OBJPATH, self.service, QDBusConnection.RegisterOption.ExportAllSlots
         )
         script = self._render_script(bus)
         if script is None:
+            self.error = "kwin"
             return False
         self._loaded = self._load_script(script)
+        if not self._loaded:
+            self.error = "kwin"
         return self._loaded
 
     def _load_script(self, script: str) -> bool:
@@ -181,7 +190,7 @@ class KWinBridge(QObject):
             self._reload()
 
     def _render_script(self, bus: QDBusConnection) -> str | None:
-        """Fill __CATGAME_IFACE__ in the JS template with the interface name
+        """Fill __PLASMACAT_IFACE__ in the JS template with the interface name
         discovered by introspecting our own freshly-registered object.
         Retries: right after a previous instance dies, the bus name can briefly
         route to the corpse."""
@@ -218,7 +227,8 @@ class KWinBridge(QObject):
         if CONTROL_PLACEHOLDER not in src:
             print("[bridge] ERROR: template has no control-mode placeholder")
             return None
-        runtime = template.replace(".js", ".runtime.js")
+        from plasmacat.paths import runtime_dir
+        runtime = str(runtime_dir() / "bridge.js")
         with open(runtime, "w", encoding="utf-8") as fh:
             fh.write(src.replace(IFACE_PLACEHOLDER, iface)
                      .replace(CONTROL_PLACEHOLDER,
@@ -230,6 +240,7 @@ class KWinBridge(QObject):
         if self._loaded:
             self._scripting.call("unloadScript", SCRIPT_PLUGIN)
             self._loaded = False
+            print("[bridge] bridge unloaded")
 
     def start_watchdog(self, parent: QObject) -> None:
         """Reload the bridge script if KWin/Plasma restarts (the script dies
@@ -249,9 +260,57 @@ class KWinBridge(QObject):
 
 
 def unload_bridge() -> None:
-    """Standalone helper: unload a leftover script (e.g. after a crash).
-    Also cleans up the legacy pre-rename 'catgame-bridge' if present."""
+    """Standalone helper: unload a leftover script (e.g. after a crash)."""
     scripting = QDBusInterface("org.kde.KWin", "/Scripting",
                                "org.kde.kwin.Scripting")
     scripting.call("unloadScript", SCRIPT_PLUGIN)
-    scripting.call("unloadScript", "catgame-bridge")  # legacy name (pre-P33)
+
+
+class FakeBridge(QObject):
+    """Test-only stand-in (PLASMACAT_FAKE_BRIDGE=1): same signals and
+    lifecycle as KWinBridge, no DBus and no KWin. Lets the whole app run
+    headless in tests."""
+
+    cursorChanged = Signal(int, int)
+    windowsChanged = Signal(list)
+    workAreasChanged = Signal(list)
+    overlayTagged = Signal(str)
+    keyEvent = Signal(str)
+    activateRequested = Signal()
+    fullscreenChanged = Signal(bool)
+
+    def __init__(self, script_path: str = "", parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._loaded = False
+        self.error: str | None = None
+
+    def start(self) -> bool:
+        self._loaded = True
+        self.workAreasChanged.emit([{"x": 0, "y": 0, "w": 1920, "h": 1040}])
+        return True
+
+    def start_watchdog(self, parent: QObject) -> None:
+        pass
+
+    def set_control_mode(self, on: bool) -> None:
+        pass
+
+    def stop(self) -> None:
+        if self._loaded:
+            self._loaded = False
+            print("[bridge] bridge unloaded")
+
+
+def activate_running_instance() -> bool:
+    """Ask an already running PlasmaCat to show itself (second launch)."""
+    iface = QDBusInterface(SERVICE, OBJPATH, "", QDBusConnection.sessionBus())
+    reply = iface.call("Activate", "")
+    return not reply.errorMessage()
+
+
+def make_bridge(script_path: str):
+    """The real KWin bridge, or the headless fake when PLASMACAT_FAKE_BRIDGE=1."""
+    import os
+    if os.environ.get("PLASMACAT_FAKE_BRIDGE") == "1":
+        return FakeBridge(script_path)
+    return KWinBridge(script_path)

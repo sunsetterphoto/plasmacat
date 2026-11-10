@@ -89,7 +89,7 @@ class CatBody:
         in front is a wall). Returns the blocking side x, or None."""
         body_top = self.y - 96.0
         direction = 1 if x_next > self.x else -1
-        for w in desktop._windows:
+        for w in desktop.windows:
             if not (w["y"] < self.y - 10 and w["y"] + w["h"] > body_top + 10):
                 continue  # no vertical overlap with the cat's body
             if (self.platform is not None and not self.platform.floor
@@ -150,7 +150,12 @@ class CatBody:
                 self.vy = 0.0
                 self.platform = None
                 return
-            self.x += cur.x0 - self.platform.x0  # ride horizontal window moves
+            # ride horizontal window moves — by the WINDOW's x: a window in
+            # front can clip the visible segment without this window moving
+            if cur.win_x is not None and self.platform.win_x is not None:
+                self.x += cur.win_x - self.platform.win_x
+            else:
+                self.x += cur.x0 - self.platform.x0
             self.y = cur.y                       # and vertical ones
             self.platform = cur
             if not cur.contains_x(self.x, 12.0):
