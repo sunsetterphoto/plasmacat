@@ -45,6 +45,14 @@ function isPlasmaCatWindow(w) {
   return w.resourceClass === "plasmacat";
 }
 
+// Helper windows nobody can see must not become platforms: the XWayland
+// video bridge is a full-size 'normal' window with opacity 0 (measured:
+// 638x359 in the middle of the screen — the cat sat on thin air).
+function isInvisible(w) {
+  return w.resourceClass === "xwaylandvideobridge" || w.hidden === true
+    || (typeof w.opacity === "number" && w.opacity < 0.05);
+}
+
 function isFurnitureWindow(w) {
   return w.caption.indexOf("plasmacat-furniture") === 0;
 }
@@ -111,6 +119,7 @@ function sendWindows() {
   for (let i = 0; i < stack.length; i++) {
     const w = stack[i];
     if (isPlasmaCatWindow(w) || !w.normalWindow || w.minimized) continue;
+    if (isInvisible(w)) continue;
     if (w.desktops.length > 0 && w.desktops.indexOf(workspace.currentDesktop) < 0) continue;
     const g = w.frameGeometry;
     wins.push({
@@ -145,14 +154,18 @@ function sendWorkAreas() {
   for (let i = 0; i < outs.length; i++) {
     if (outs[i] !== workspace.activeScreen) ordered.push(outs[i]);
   }
-  // only visible, horizontal panels can carry a floor (a side panel or an
-  // auto-hidden one must never lift it)
+  // only horizontal panels can carry a floor (never a side panel); hidden
+  // ones are reported but not used for the estimate — the app decides with
+  // Plasma's settings whether a hiding panel still carries the floor
   const docks = [];
   const stack = workspace.stackingOrder;
   for (let i = 0; i < stack.length; i++) {
     const w = stack[i];
     const g = w.frameGeometry;
-    if (w.dock && !w.hidden && g.width > g.height) docks.push(g);
+    if (w.dock && g.width > g.height) {
+      docks.push({ x: g.x, y: g.y, width: g.width, height: g.height,
+                   hidden: w.hidden === true });
+    }
   }
   const areas = [];
   for (let i = 0; i < ordered.length; i++) {
@@ -167,9 +180,9 @@ function sendWorkAreas() {
       const hOverlap = dg.x < a.x + a.width && dg.x + dg.width > a.x;
       const atBottom = dg.y + dg.height >= areaBottom - 4;
       if (hOverlap && atBottom && dg.y < areaBottom) {
-        bottom = Math.min(bottom, visualFloor(areaBottom, reserved, dg));
+        if (!dg.hidden) bottom = Math.min(bottom, visualFloor(areaBottom, reserved, dg));
         panels.push({ y: Math.round(dg.y), h: Math.round(dg.height),
-                      reserved: Math.round(reserved) });
+                      reserved: Math.round(reserved), hidden: dg.hidden });
       }
     }
     // the app refines the floor with Plasma's panel settings (floating?

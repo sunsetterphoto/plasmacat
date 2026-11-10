@@ -149,6 +149,7 @@ test("an auto-hidden panel is ignored, and showing it updates the floor", () => 
   ctx.sendWorkAreas();
   let areas = JSON.parse(calls.filter((c) => c.method === "SetWorkAreas").pop().payload);
   assert.equal(areas[0].h, 1091);
+  assert.equal(areas[0].panels[0].hidden, true);   // reported, for the app to decide
   calls.length = 0;
   panel.hidden = false;
   panel.hiddenChanged();
@@ -164,5 +165,16 @@ test("work areas carry the raw bottom and the panels for refinement", () => {
   ctx.sendWorkAreas();
   const a = JSON.parse(calls.find((c) => c.method === "SetWorkAreas").payload)[0];
   assert.equal(a.raw_bottom, 1091);
-  assert.deepEqual(a.panels, [{ y: 1047, h: 44, reserved: 0 }]);
+  assert.deepEqual(a.panels, [{ y: 1047, h: 44, reserved: 0, hidden: false }]);
+});
+
+test("invisible helper windows are never platforms", () => {
+  const ghost = makeWindow({ resourceClass: "xwaylandvideobridge", opacity: 0,
+                             internalId: { toString: () => "{ghost}" } });
+  const faded = makeWindow({ opacity: 0, internalId: { toString: () => "{faded}" } });
+  const real = makeWindow({ opacity: 1, internalId: { toString: () => "{real}" } });
+  const { ctx, calls } = load({ windows: [ghost, faded, real] });
+  ctx.sendWindows();
+  const ids = JSON.parse(calls.find((c) => c.method === "SetWindows").payload).map((w) => w.id);
+  assert.deepEqual(ids, ["{real}"]);
 });

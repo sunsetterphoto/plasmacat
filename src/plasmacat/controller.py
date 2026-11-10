@@ -53,6 +53,7 @@ class AppController(QObject):
         self.settings = settings
         self._save = save
         self.quit_requested: Callable[[], None] | None = None
+        self.panel_dock = None      # bridge.panels.PanelDock, set by the app
         self.show_control_center: Callable[[str], None] | None = None
         self.apply_settings()
 
@@ -76,7 +77,15 @@ class AppController(QObject):
         if self.overlay.pixel_size != s.pixel_size:
             self.overlay.set_pixel_size(s.pixel_size)
         self.overlay.refresh_status_board()
+        if self.panel_dock is not None:
+            # a docked panel has an exact, straight top edge to stand on
+            (self.panel_dock.dock if s.dock_panel else self.panel_dock.restore)()
         self.changed.emit()
+
+    def shutdown(self) -> None:
+        """Give the desktop back as we found it."""
+        if self.panel_dock is not None:
+            self.panel_dock.restore()
 
     def update_settings(self, **values) -> None:
         for k, v in values.items():

@@ -74,6 +74,18 @@ is, and puts the floor on the exact visible top — this also covers docked
 panels without a strut ("dodge windows"). `tests/bridge.test.mjs` and
 `tests/test_panels.py` pin the cases.
 
+The floor is kept **stable**: a panel that only dodges windows keeps carrying
+it while hidden (otherwise everything would jump whenever a window touches
+the panel); an auto-hide panel never carries it. And because a floating
+panel has rounded, inset edges, `PanelDock` docks floating bottom panels while
+the app runs (setting *dock_panel*, plasmashell scripting `panel.floating`)
+and floats them again on quit; the ids it changed are kept in
+`panels-docked.json`, so a crash is repaired on the next start.
+
+Windows nobody can see are never platforms: `xwaylandvideobridge`, hidden
+windows and anything with opacity 0 are skipped (the video bridge is a
+full-size "normal" window in the middle of the screen).
+
 ## Windows and layers
 
 - **Front window**: small, frameless, translucent, input-transparent, kept

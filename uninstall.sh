@@ -8,6 +8,8 @@ CFG="${XDG_CONFIG_HOME:-$HOME/.config}"
 
 # PLASMACAT_SANDBOX=1 (tests): never touch the live session
 if [ -z "${PLASMACAT_SANDBOX:-}" ]; then
+  # unload the KWin script and float any panel PlasmaCat docked
+  [ -x "$DATA/plasmacat/app/run.sh" ] && "$DATA/plasmacat/app/run.sh" --unload-bridge >/dev/null 2>&1 || true
   pkill -TERM -f 'python[0-9.]* -m plasmacat\.main' 2>/dev/null || true
   systemctl --user disable --now plasmacat-update.timer >/dev/null 2>&1 || true
 fi

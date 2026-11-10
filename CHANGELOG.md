@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.1 — 2026-11-10
+
+### Added
+- **Docks a floating bottom panel while PlasmaCat runs** (System tab, on by
+  default): cats and furniture stand exactly on the panel edge. The panel
+  floats again when PlasmaCat quits (also after a crash, on the next start or
+  `./run.sh --unload-bridge`).
+
+### Fixed
+- The cat walked and sat on thin air: invisible helper windows (the XWayland
+  video bridge, any window with zero opacity) counted as platforms.
+- With a panel set to "dodge windows", the floor — cats, bowls, furniture —
+  jumped up and down whenever a window touched the panel. The floor now stays
+  on the panel line; only a true auto-hide panel leaves it at the screen edge.
+
 ## 0.2.0 — 2026-11-10
 
 A full rework: everything in one Control Center, finer art, real installs

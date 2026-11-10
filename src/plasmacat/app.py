@@ -109,8 +109,10 @@ def run(argv: list[str]) -> int:
     if "--unload-bridge" in argv:
         QCoreApplication(argv)  # needed for the DBus connection
         from plasmacat.bridge.kwin import unload_bridge
+        from plasmacat.bridge.panels import PanelDock
         unload_bridge()
-        print("bridge unload requested")
+        restored = PanelDock(paths.state_dir() / "panels-docked.json").restore()
+        print("bridge unload requested" + (f"; panels restored: {restored}" if restored else ""))
         return 0
 
     app = QApplication(argv)
@@ -120,7 +122,8 @@ def run(argv: list[str]) -> int:
     app.setWindowIcon(QIcon(str(paths.data_file("icons/plasmacat-256.png"))))
 
     from plasmacat import persist
-    from plasmacat.bridge.kwin import activate_running_instance, make_bridge
+    from plasmacat.bridge.kwin import FakeBridge, activate_running_instance, make_bridge
+    from plasmacat.bridge.panels import PanelDock
     from plasmacat.controller import AppController
     from plasmacat.sound.player import SoundPlayer
     from plasmacat.ui.control_center import ControlCenter
@@ -170,6 +173,9 @@ def run(argv: list[str]) -> int:
 
     ctl = AppController(overlay=overlay, player=player, bridge=bridge,
                         settings=settings, save=save_now)
+    if not isinstance(bridge, FakeBridge):       # never touch a panel in tests
+        ctl.panel_dock = PanelDock(data_dir / "panels-docked.json")
+        ctl.apply_settings()
     center = ControlCenter(ctl, save_path=save_path)
     ctl.show_control_center = center.show_tab
     ctl.quit_requested = app.quit
@@ -191,8 +197,11 @@ def run(argv: list[str]) -> int:
     save_timer.start(SAVE_EVERY_MS)
 
     def shutdown() -> None:
-        save_now()
-        bridge.stop()
+        try:
+            save_now()
+        finally:
+            ctl.shutdown()       # undock panels
+            bridge.stop()
 
     app.aboutToQuit.connect(shutdown)
     install_signal_handlers(app, app.quit)

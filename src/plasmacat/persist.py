@@ -98,6 +98,7 @@ class Settings:
     # System tab
     pixel_size: str = "normal"
     hide_on_fullscreen: bool = True
+    dock_panel: bool = True             # dock floating bottom panels while running
     notify: dict[str, bool] = field(
         default_factory=lambda: {k: True for k in NOTIFY_KINDS})
     auto_update: bool = True
@@ -105,7 +106,8 @@ class Settings:
     TABS = {
         "sound": ("sound_on", "volume", "sound_groups"),
         "home": ("status_board", "status_pos", "status_rows"),
-        "system": ("pixel_size", "hide_on_fullscreen", "notify", "auto_update"),
+        "system": ("pixel_size", "hide_on_fullscreen", "dock_panel", "notify",
+                   "auto_update"),
     }
 
     @classmethod
@@ -136,7 +138,8 @@ class Settings:
                     if isinstance(src.get(k), bool):
                         target[k] = src[k]
 
-        for key in ("sound_on", "status_board", "hide_on_fullscreen", "auto_update"):
+        for key in ("sound_on", "status_board", "hide_on_fullscreen", "dock_panel",
+                    "auto_update"):
             flag(key)
         for key in ("sound_groups", "status_rows", "notify"):
             flags(key)

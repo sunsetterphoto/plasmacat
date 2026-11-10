@@ -36,6 +36,11 @@ class SystemTab(QWidget):
         self.fullscreen = QCheckBox("Hide the cats while a window is fullscreen")
         self.fullscreen.toggled.connect(lambda on: ctl.update_settings(hide_on_fullscreen=on))
         form.addRow(self.fullscreen)
+        self.dock_panel = QCheckBox("Dock a floating bottom panel while PlasmaCat runs")
+        self.dock_panel.setToolTip("Cats and furniture stand exactly on the panel edge. "
+                                   "The panel floats again when PlasmaCat quits.")
+        self.dock_panel.toggled.connect(lambda on: ctl.update_settings(dock_panel=on))
+        form.addRow(self.dock_panel)
         lay.addWidget(general)
 
         notes = QGroupBox("Notifications")
@@ -129,6 +134,7 @@ class SystemTab(QWidget):
                                      "install.sh (this one runs from a source checkout).")
         pairs = [(self.autostart, self.ctl.autostart_enabled()),
                  (self.fullscreen, s.hide_on_fullscreen),
+                 (self.dock_panel, s.dock_panel),
                  (self.auto_update, s.auto_update)] + \
             [(cb, s.notify.get(k, True)) for k, cb in self.notify.items()]
         for w, val in pairs:
