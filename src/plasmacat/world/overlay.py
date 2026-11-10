@@ -110,6 +110,9 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self._time = 0.0
         self._dbg_t = 0.0
         self._placing: str | None = None      # placement mode: prop follows cursor
+        self._arranging = False               # arrange mode: pick pieces up
+        self._move_index: int | None = None
+        self._fullscreen_active = False
         self._place_since = 0.0
         self._inactive_since: float | None = None
         self._last_sig: tuple = ()
@@ -139,6 +142,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         bridge.windowsChanged.connect(self.desktop.set_windows)
         bridge.workAreasChanged.connect(self._on_work_areas)
         bridge.keyEvent.connect(self._on_key_event)  # P42 control mode
+        if hasattr(bridge, "fullscreenChanged"):
+            bridge.fullscreenChanged.connect(self._on_fullscreen)
 
         # ONE CursorTracker (fed here, D13); one InteractionDetector per cat
         # sharing it, so each cat keeps its own stroke/rub accumulators
@@ -202,6 +207,11 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self.update()
         self._furn_update_all()
         return True
+
+    def _on_fullscreen(self, on: bool) -> None:
+        """A fullscreen window is active (video, game): step aside."""
+        self._fullscreen_active = on
+        self.set_hidden("fullscreen", on and self.settings.hide_on_fullscreen)
 
     def set_hidden(self, reason: str, on: bool) -> None:
         """Hide every PlasmaCat window while any reason holds ('pause' from
@@ -644,7 +654,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self._apply_dpr(self.devicePixelRatioF())
         old_front, old_back = self._layer_regions()
 
-        if self._placing and self._time - self._place_since > 30.0:
+        if (self._placing or self._arranging) and self._time - self._place_since > 60.0:
             self._end_placement()  # auto-cancel dangling placement
         if any(c.brain.state == "wheel_run" for c in self.cats):
             self._wheel_angle = (self._wheel_angle + 200.0 * dt) % 360.0
@@ -950,7 +960,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                 int(2.5 * math.sin(self._time * 3.0)) if c.brain.bubble else 0,
             ))
         return (
-            tuple(per_cat), self._placing,
+            tuple(per_cat), self._placing, self._arranging,
             # only FRONT toys: floor toys on the back layer have their own
             # back_toy_sig and must not repaint this window (P42). Carried
             # flips + laser blink (visible) change the pixels without
@@ -965,7 +975,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         )
 
     def _is_active(self) -> bool:
-        if self._placing or self._doors:
+        if self._placing or self._arranging or self._doors:
             return True  # placement + door flaps must animate smoothly (P27)
         for cat in self.cats:
             b = cat.body
@@ -1062,6 +1072,12 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                 pm = self._props[frame]
                 p.drawPixmap(int(d[0]) - lw(pm) // 2, int(d[1]) - lh(pm), pm)
             # placement ghost + hint
+            if self._arranging and not self._placing:
+                hit = self._prop_at(*self.desktop.cursor)
+                if hit is not None:      # highlight what a click would pick up
+                    p.setPen(QPen(QColor(120, 200, 255), 2, Qt.PenStyle.DashLine))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawRect(self._prop_rect(*hit).adjusted(-4, -4, 4, 4))
             if self._placing:
                 gr = self._ghost_rect()
                 p.setOpacity(0.65)
@@ -1072,7 +1088,11 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                                                                self._placing)
                     p.drawPixmap(gr.x(), gr.y(), self._props[key])
                 p.setOpacity(1.0)
-                hint = "Left-click to place — right-click to cancel"
+            if self._placing or self._arranging:
+                hint = ("Click to put it down  ·  Right-click or Esc cancels"
+                        if self._placing else
+                        "Click a piece to move it  ·  Del removes the one under the "
+                        "cursor  ·  Right-click or Esc: done")
                 fm = p.fontMetrics()
                 tw = fm.horizontalAdvance(hint)
                 hx = (self.width() - tw) // 2

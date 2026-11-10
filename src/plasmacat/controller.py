@@ -71,6 +71,8 @@ class AppController(QObject):
             self.player.set_volume(s.volume)
             for group, on in s.sound_groups.items():
                 self.player.set_group_enabled(group, on)
+        self.overlay.set_hidden(
+            "fullscreen", s.hide_on_fullscreen and self.overlay._fullscreen_active)
         if self.overlay.pixel_size != s.pixel_size:
             self.overlay.set_pixel_size(s.pixel_size)
         self.overlay.refresh_status_board()
@@ -191,6 +193,9 @@ class AppController(QObject):
     def clean_puke(self) -> None:
         self.overlay.active.brain.clean_puke()
         self.changed.emit()
+
+    def arrange(self) -> None:
+        self.overlay.begin_arrange()
 
     def place_status_board(self) -> None:
         if not self.settings.status_board:

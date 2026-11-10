@@ -41,7 +41,14 @@ class HomeTab(QWidget):
         lay.addWidget(place)
 
         self.items_box = QGroupBox("Your furniture")
-        self.items = QGridLayout(self.items_box)
+        box_lay = QVBoxLayout(self.items_box)
+        self.arrange_button = QPushButton("Arrange on the desktop…")
+        self.arrange_button.setToolTip("Click pieces on the desktop to move them; "
+                                       "Del removes the one under the cursor")
+        self.arrange_button.clicked.connect(ctl.arrange)
+        box_lay.addWidget(self.arrange_button)
+        self.items = QGridLayout()
+        box_lay.addLayout(self.items)
         lay.addWidget(self.items_box)
         self.remove_buttons: dict = {}
         self._items_key = None

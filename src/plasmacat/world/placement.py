@@ -1,4 +1,7 @@
-"""Placement mode: the front window goes fullscreen, the prop follows the cursor, a click drops it."""
+"""Placement and arrange mode: the front window goes fullscreen and takes
+input. Placing: the prop follows the cursor, a click drops it. Arranging:
+click a placed piece to pick it up, Del removes the one under the cursor.
+Right-click or Esc ends either mode."""
 
 from __future__ import annotations
 
@@ -21,27 +24,91 @@ class PlacementMixin:
     def begin_placement(self, kind: str) -> None:
         """kind: 'ball' | 'plush' | 'food_bowl' | 'water_fountain' |
         'wall_shelf' | 'box' | 'status' | furniture kinds. The prop sticks to
-        the cursor; left-click drops it, right-click cancels."""
+        the cursor; left-click drops it, right-click or Esc cancels."""
         self._placing = kind
         self._place_since = self._time
+        self._enter_input_mode()
+
+    def begin_arrange(self) -> None:
+        """Arrange the furniture in place: pick pieces up, delete them."""
+        self._arranging = True
+        self._placing = None
+        self._place_since = self._time
+        self._enter_input_mode()
+
+    def _enter_input_mode(self) -> None:
         # plain title: no '@geometry' — the KWin script leaves a fullscreen
-        # window alone while placement mode needs the whole screen (P37)
+        # window alone while these modes need the whole screen (P37)
         self.setWindowTitle("plasmacat")
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, False)
         self.showFullScreen()
         self.activateWindow()
         self.raise_()
+        self.setFocus()
+        self.update()
+
     def _end_placement(self) -> None:
         self._placing = None
+        self._arranging = False
         self._move_index = None
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
         self.showNormal()
         self._sync_window_geometry(force=True)  # back to the small window
+
+    # -- arrange mode helpers ---------------------------------------------------
+
+    def _prop_rect(self, kind: str, index: int | None) -> QRect:
+        """World rect of a placed piece (for picking it up)."""
+        b = self.cat.brain
+        if kind == "wall_shelf":
+            rects = self._shelf_rects()
+            return rects[index] if index is not None and index < len(rects) else QRect()
+        if kind == "wheel_stand":
+            return self._wheel_rect()
+        if kind == "box":
+            return self._box_rect()
+        attr = next(a for k, _l, a in self.FURNITURE if k == kind)
+        x = getattr(b, attr)
+        if x is None:
+            return QRect()
+        return self._bowl_rect(x, {"water_fountain": "fountain_0"}.get(kind, kind))
+
+    def _prop_at(self, x: float, y: float) -> tuple[str, int | None] | None:
+        """The topmost placed piece under (x, y) — shelves and small items
+        win over the big furniture behind them."""
+        hits = [(kind, idx) for kind, _label, idx in self.furniture_items()
+                if self._prop_rect(kind, idx).contains(int(x), int(y))]
+        if not hits:
+            return None
+        return min(hits, key=lambda h: self._prop_rect(*h).width()
+                   * self._prop_rect(*h).height())
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        k = event.key()
+        if not (self._placing or self._arranging):
+            return
+        if k == Qt.Key.Key_Escape:
+            self._end_placement()
+        elif k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self._arranging \
+                and not self._placing:
+            hit = self._prop_at(*self.desktop.cursor)
+            if hit is not None and hit[0] not in self.BOWLS:
+                self.remove_furniture(*hit)
+                self.update()
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        if not self._placing:
+        if not (self._placing or self._arranging):
             return
         if event.button() == Qt.MouseButton.RightButton:
             self._end_placement()
+            return
+        if self._arranging and not self._placing:
+            if event.button() == Qt.MouseButton.LeftButton:
+                pos = event.position()
+                hit = self._prop_at(pos.x(), pos.y())
+                if hit is not None:
+                    self._move_index = hit[1]
+                    self._placing = hit[0]    # carry it; the next click drops it
+                    self.update()
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return

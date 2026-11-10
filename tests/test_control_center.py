@@ -96,3 +96,9 @@ def test_system_tab_pixel_size_applies(cc, ctl):
     sysw.pixel_size.setCurrentIndex(sysw.pixel_size.findData("chunky"))
     assert ctl.settings.pixel_size == "chunky"
     assert ctl.overlay.pixel_size == "chunky"
+
+
+def test_home_tab_arrange_button_starts_arrange_mode(cc, ctl):
+    cc.tabs["home"].arrange_button.click()
+    assert ctl.overlay._arranging
+    ctl.overlay._end_placement()
