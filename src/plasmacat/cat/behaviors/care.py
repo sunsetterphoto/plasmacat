@@ -189,15 +189,21 @@ def to_water(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> No
         self.state = "drinking"
         self.state_left = self.rng.uniform(20, 120)
         self._fx_t = 0.0
+        self._lap_t = 0.0
 
 
 def drinking(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> None:
     # the fountain never runs dry (P25): nothing to drain or beg for
     self.gain("thirst", 1.5 * dt)
+    # the fountain bubbles softly; a quiet lap only now and then
     self._fx_t -= dt
     if self._fx_t <= 0:
+        self.sounds.append("bubble")
+        self._fx_t = 4.0
+    self._lap_t -= dt
+    if self._lap_t <= 0:
         self.sounds.append("drink")
-        self._fx_t = 1.4
+        self._lap_t = 9.0
     if self.needs["thirst"] >= 99.0:
         self.state_left = min(self.state_left, 0.5)  # had enough
     if self.state_left <= 0:

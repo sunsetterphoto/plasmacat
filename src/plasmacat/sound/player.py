@@ -17,6 +17,16 @@ from PySide6.QtCore import QUrl
 from PySide6.QtMultimedia import QSoundEffect
 
 
+# Per-effect gain on top of the master volume. The recordings differ a lot in
+# loudness (measured mean: purr/eat -15 dB, drink -18 dB, chime -28 dB); the
+# fountain bubbles are meant to be barely noticeable.
+GAIN: dict[str, float] = {
+    "purr": 0.45, "eat": 0.45, "drink": 0.3, "bubble": 0.5,
+    "beg": 0.6, "mew": 0.7, "puke": 0.7, "meow": 0.85, "meow2": 0.85,
+    "hiss": 0.7,
+}
+
+
 class SoundPlayer:
     def __init__(self, sounds_dir: Path, muted: bool = False,
                  volume: float = 0.7) -> None:
@@ -28,7 +38,7 @@ class SoundPlayer:
         self._qt_ok = True
         self._player_bin = shutil.which("pw-play") or shutil.which("paplay")
         for wav in sorted(self.sounds_dir.glob("*.wav")):
-            self._load(wav.stem, wav, self.volume)
+            self._load(wav.stem, wav, self.volume * GAIN.get(wav.stem, 1.0))
 
     def _load(self, name: str, wav: Path, volume: float) -> None:
         eff = QSoundEffect()
@@ -58,8 +68,13 @@ class SoundPlayer:
         elif self._player_bin:
             wav = self.sounds_dir / f"{name}.wav"
             if wav.exists():
+                vol = self.volume * GAIN.get(name, 1.0)
+                if self._player_bin.endswith("paplay"):
+                    flag = f"--volume={int(vol * 65536)}"
+                else:
+                    flag = f"--volume={vol:.3f}"
                 subprocess.Popen(
-                    [self._player_bin, str(wav)],
+                    [self._player_bin, flag, str(wav)],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def set_muted(self, muted: bool) -> None:
@@ -67,5 +82,5 @@ class SoundPlayer:
 
     def set_volume(self, volume: float) -> None:
         self.volume = volume
-        for eff in self._effects.values():
-            eff.setVolume(volume)
+        for name, eff in self._effects.items():
+            eff.setVolume(volume * GAIN.get(name, 1.0))

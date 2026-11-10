@@ -53,9 +53,9 @@ def to_peer(self: Brain, dt: float, body: CatBody, desktop: DesktopState) -> Non
             self.state_left = self.rng.uniform(2.5, 4.0)
             pr.state = "fight"
             pr.state_left = self.state_left + self.rng.uniform(-0.5, 0.5)
-            self._fx_t = 0.0
-            pr._fx_t = 0.4
-            self.sounds.append("meow2")
+            self._fx_t = 0.6
+            pr._fx_t = 0.9
+            pr.sounds.append("hiss")       # the one approached hisses first
             self.log.append("a proper cat spat!")
             self._peer = None
         else:  # chase — she runs, I follow

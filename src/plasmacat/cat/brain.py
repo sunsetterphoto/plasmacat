@@ -119,6 +119,7 @@ class Brain:
         self._jump_then: tuple[float, float, str] | None = None  # after prep
         self._gift_toy = None            # plush being carried to the human
         self._land_then = "idle"         # state after landing (supervise drop)
+        self._lap_t = 0.0                # drinking: time to the next lap sound
         # P28: the visibility level is a deliberate decision with a dwell
         # time, not a per-frame derivation (no more chaotic flip-flopping)
         self._level = "front"
@@ -736,7 +737,7 @@ class Brain:
 
     def refill_water(self) -> None:
         self.water_fill = 100.0
-        self.sounds.append("drink")
+        self.sounds.append("bubble")
         self.log.append("water refilled")
 
     def clean_litter(self) -> None:
