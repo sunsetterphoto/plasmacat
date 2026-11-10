@@ -151,5 +151,5 @@ restarts. Releases are git tags on `main`.
 - `python3 -m pytest` — unit tests plus two long headless scenarios run in
   subprocesses (`tests/sim_test.py`: minutes of simulated cat life;
   `tests/window_geo_test.py`: the small-window policy).
-- `node --test tests/` — the KWin script against stubbed KWin APIs.
+- `node --test tests/*.test.mjs` — the KWin script against stubbed KWin APIs.
 - CI (GitHub Actions) runs both on every push.

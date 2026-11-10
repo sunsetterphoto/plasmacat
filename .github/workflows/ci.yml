@@ -25,4 +25,4 @@ jobs:
         run: pytest -q
       - name: KWin bridge tests
         run: |
-          if ls tests/*.test.mjs >/dev/null 2>&1; then node --test tests/; fi
+          node --test tests/*.test.mjs

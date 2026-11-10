@@ -92,7 +92,7 @@ cat's small, click-through window. Details in
 ./install.sh --dev          # run this checkout from the app menu (no auto-update)
 ./run.sh --debug            # or start it directly
 python3 -m pytest           # the test suite (headless)
-node --test tests/          # the KWin script tests
+node --test tests/*.test.mjs          # the KWin script tests
 PYTHONPATH=src python3 tools/render_sheet.py   # sprite review sheet
 ```
 
