@@ -183,3 +183,19 @@ def test_system_tab_has_the_dock_switch(cc, ctl):
     box = cc.tabs["system"].dock_panel
     box.setChecked(False)
     assert ctl.settings.dock_panel is False
+
+
+def test_home_tab_offers_furniture_as_picture_tiles(cc, ctl):
+    home = cc.tabs["home"]
+    assert {"cat_bed", "cat_tree", "wall_shelf", "food_bowl"} <= set(home.place_tiles)
+    tile = home.place_tiles["cat_bed"]
+    assert not tile.icon().isNull() and "bed" in tile.text().lower()
+    tile.click()
+    assert ctl.overlay._placing == "cat_bed"
+    ctl.overlay._end_placement()
+
+
+def test_play_tab_toys_have_pictures(cc):
+    play = cc.tabs["play"]
+    for key in ("ball", "plush", "string", "laser"):
+        assert not play.tiles[key].icon().isNull()

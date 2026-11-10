@@ -10,13 +10,14 @@ from PySide6.QtWidgets import (
 
 from plasmacat.cat.needs import FOODS
 from plasmacat.persist import NEED_ROWS
-from plasmacat.ui.tabs.common import hint, need_bar, reset_row, set_need
+from plasmacat.ui.tabs.common import hint, need_bar, reset_row, set_need, tile
 
 PLACEABLE = (("food_bowl", "Food bowl"), ("water_fountain", "Water fountain"),
              ("scratch_post", "Scratching post"), ("cat_bed", "Cat bed"),
              ("cat_grass", "Cat grass"), ("litter_0", "Litter box"),
              ("cat_tree", "Big cat tree"), ("wheel_stand", "Exercise wheel"),
              ("wall_shelf", "Wall shelf"), ("box", "Cardboard box"))
+TILE_ART = {"water_fountain": "fountain_1", "wheel_stand": "wheel_rim"}   # tile picture where it differs from the kind
 ROW_LABELS = {"hunger": "Food", "thirst": "Water", "energy": "Energy", "play": "Play",
               "affection": "Affection", "bladder": "Litter need",
               "food_bowl": "Food bowl", "litter_box": "Litter box"}
@@ -28,16 +29,15 @@ class HomeTab(QWidget):
         self.ctl = ctl
         lay = QVBoxLayout(self)
 
-        place = QGroupBox("Add furniture")
+        place = QGroupBox("Add furniture — pick one, then click on the desktop")
         pg = QGridLayout(place)
-        self.place_combo = QComboBox()
-        for kind, label in PLACEABLE:
-            self.place_combo.addItem(label, kind)
-        go = QPushButton("Place…")
-        go.setToolTip("Click on the desktop to put it down (right-click or Esc cancels)")
-        go.clicked.connect(lambda: ctl.place(self.place_combo.currentData()))
-        pg.addWidget(self.place_combo, 0, 0)
-        pg.addWidget(go, 0, 1)
+        self.place_tiles: dict = {}
+        for i, (kind, label) in enumerate(PLACEABLE):
+            t = tile(label, TILE_ART.get(kind, kind),
+                     "Click on the desktop to put it down (right-click or Esc cancels)")
+            t.clicked.connect(lambda _c=False, k=kind: ctl.place(k))
+            self.place_tiles[kind] = t
+            pg.addWidget(t, i // 5, i % 5)
         lay.addWidget(place)
 
         self.items_box = QGroupBox("Your furniture")

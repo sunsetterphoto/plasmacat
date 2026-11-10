@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QPushButton, QWidget
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QProgressBar, QPushButton, QToolButton, QWidget,
+)
 
 
 def need_bar(value: float) -> QProgressBar:
@@ -32,6 +36,27 @@ def reset_row(on_reset, text: str = "Reset to defaults") -> tuple[QWidget, QPush
     btn.clicked.connect(on_reset)
     lay.addWidget(btn)
     return row, btn
+
+
+def prop_icon(name: str) -> QIcon:
+    """A prop's pixel art as an icon (crisp, on a transparent tile)."""
+    from plasmacat.cat.render import prop_pixmap
+    return QIcon(prop_pixmap(name, device_px=2))
+
+
+def tile(text: str, prop: str, tooltip: str = "", checkable: bool = False) -> QToolButton:
+    """A picture tile: the thing's art above its name."""
+    b = QToolButton()
+    b.setText(text)
+    b.setIcon(prop_icon(prop))
+    b.setIconSize(QSize(56, 56))
+    b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+    b.setMinimumSize(104, 92)
+    b.setCheckable(checkable)
+    b.setAutoRaise(False)
+    if tooltip:
+        b.setToolTip(tooltip)
+    return b
 
 
 def hint(text: str) -> QLabel:

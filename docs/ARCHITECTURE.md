@@ -96,8 +96,13 @@ full-size "normal" window in the middle of the screen).
 - **Furniture layer**: one fullscreen window per screen, kept below (desktop
   level), repainted only on content changes. Furniture, bowls, resting toys
   and the status board live here, behind your windows.
+- **Input**: both window kinds are click-through except over cats and
+  things: `Overlay.update_input_masks()` sets a Wayland input region
+  (`QWindow.setMask`, committed with the next frame) from
+  `interactive_rects()`. Clicks land in `handle_click()` — right: the thing's
+  menu (`ui/context_menus.py`), left on a cat: a pet.
 - **Placement / arrange mode** temporarily makes the front window fullscreen
-  and input-receiving (plain title: the script leaves it alone).
+  with no mask (plain title: the script leaves it alone).
 - **Hiding**: `Overlay.set_hidden(reason, on)` hides every window while any
   reason holds (`pause`, `fullscreen`). Needs keep running, but hidden cats
   are silent, ignore the cursor and send no notifications (except an update

@@ -37,6 +37,9 @@ switched off in the System tab.
   itself only has quick actions: treat, toys, pause, sound, quit.
 - **Pet her** by moving your cursor *slowly* over her; linger at her head for
   a head rub. Fast, erratic movements make her hunt your cursor.
+- **Right-click** her for the main actions — and her bowl, toys and furniture
+  for what fits them (refill, serve tuna, clean, move, remove, toss).
+  A left click pets her.
 - Start with a **food bowl** and a **water fountain** (Control Center →
   Home), then add furniture.
 
