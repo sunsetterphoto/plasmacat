@@ -482,7 +482,7 @@ class Brain:
     def on_hunt_trigger(self, body: CatBody, cursor: tuple[float, float],
                         desktop: DesktopState) -> None:
         """Fast erratic cursor movement nearby: reflex pounce sequence."""
-        if self.hunt_cooldown > 0 or body.airborne:
+        if self.hunt_cooldown > 0 or body.airborne or not desktop.cursor_active:
             return
         # never interrupt private business or committed sequences (P24):
         # a cat on the toilet / in the wheel / mid-meal does not pounce away

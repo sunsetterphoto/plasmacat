@@ -45,21 +45,33 @@ class CursorTracker:
         t = time.monotonic() if t is None else t
         return t - self.last_move_t if self.last_move_t else 1e9
 
-    def speed(self) -> float:
+    def _window(self, now: float | None) -> list[tuple[float, float, float]]:
+        """Samples inside the history window ending at `now` (default: the
+        last sample). A resting cursor ages out — its last swoosh must not
+        keep looking fast forever."""
+        if not self.hist:
+            return []
+        if now is None:
+            return list(self.hist)
+        return [h for h in self.hist if h[0] >= now - self.history_s]
+
+    def speed(self, now: float | None = None) -> float:
         """Mean cursor speed (px/s) over the tracked window."""
-        if len(self.hist) < 2:
+        pts = self._window(now)
+        if len(pts) < 2:
             return 0.0
         dist = 0.0
-        for (t0, x0, y0), (t1, x1, y1) in zip(self.hist, list(self.hist)[1:]):
+        for (t0, x0, y0), (t1, x1, y1) in zip(pts, pts[1:]):
             dist += ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
-        span = self.hist[-1][0] - self.hist[0][0]
+        span = pts[-1][0] - pts[0][0]
         return dist / span if span > 0 else 0.0
 
-    def reversals(self) -> int:
+    def reversals(self, now: float | None = None) -> int:
         """Dominant-axis direction reversals in the window (stroke/erratic count)."""
-        if len(self.hist) < 3:
+        win = self._window(now)
+        if len(win) < 3:
             return 0
-        pts = [(x, y) for _, x, y in self.hist]
+        pts = [(x, y) for _, x, y in win]
         dx_total = abs(pts[-1][0] - pts[0][0])
         dy_total = abs(pts[-1][1] - pts[0][1])
         axis = 0 if dx_total >= dy_total else 1
@@ -76,17 +88,27 @@ class CursorTracker:
 
 
 class InteractionDetector:
-    """Emits high-level events by inspecting cursor vs. cat each frame."""
+    """Emits high-level events by inspecting cursor vs. ONE cat each frame.
 
-    def __init__(self) -> None:
-        self.tracker = CursorTracker()
+    Every cat owns a detector (its stroke/rub accumulators are per cat); all
+    detectors share the single CursorTracker that the overlay feeds (D13).
+    The detector keeps its own clock: time since the last cursor sample,
+    advanced by dt, so a parked cursor ages out of the speed window."""
+
+    DIST_HIST_MAX = 64
+
+    def __init__(self, tracker: CursorTracker | None = None) -> None:
+        self.tracker = tracker if tracker is not None else CursorTracker()
+        self._seen_move_t = 0.0
+        self._since_move = 0.0
         self._stroke_cooldown = 0.0
         self._last_reversals = 0
         self._rub_t = 0.0
         self._pat_cd = 0.0             # paw-bat tease cooldown (P26)
         self._path_inside = 0.0        # petting path accumulator
         self._last_pos: tuple[float, float] | None = None
-        self._dist_hist: deque[tuple[float, float]] = deque()  # (t, dist to cat)
+        self._dist_hist: deque[tuple[float, float]] = deque(
+            maxlen=self.DIST_HIST_MAX)  # (t, dist to cat)
 
     def tick(self, dt: float, cat_rect: tuple[float, float, float, float],
              cursor: tuple[float, float]):
@@ -97,12 +119,17 @@ class InteractionDetector:
         cx, cy = cursor
         rx, ry, rw, rh = cat_rect
         inside = rx <= cx <= rx + rw and ry <= cy <= ry + rh
-        speed = self.tracker.speed()
+        if self.tracker.last_move_t != self._seen_move_t:
+            self._seen_move_t = self.tracker.last_move_t
+            self._since_move = 0.0
+        else:
+            self._since_move += dt
+        t_now = self._seen_move_t + self._since_move
+        speed = self.tracker.speed(t_now)
 
         # startle detection: fast approach toward the cat
         cat_cx, cat_cy = rx + rw / 2, ry + rh / 2
         dist = ((cx - cat_cx) ** 2 + (cy - cat_cy) ** 2) ** 0.5
-        t_now = self.tracker.hist[-1][0] if self.tracker.hist else 0.0
         self._dist_hist.append((t_now, dist))
         while self._dist_hist and self._dist_hist[0][0] < t_now - 0.4:
             self._dist_hist.popleft()
@@ -126,7 +153,7 @@ class InteractionDetector:
             else:
                 self._rub_t = 0.0
             # stroke: either ~110 px of petting motion, or a fresh reversal
-            rev = self.tracker.reversals()
+            rev = self.tracker.reversals(t_now)
             in_pet_range = PET_MIN_SPEED < speed < PET_MAX_SPEED
             stroke_by_path = in_pet_range and self._path_inside > 110.0
             stroke_by_rev = in_pet_range and rev > self._last_reversals
@@ -141,7 +168,7 @@ class InteractionDetector:
             self._path_inside = 0.0
             self._last_pos = None
             cat_cx = rx + rw / 2
-            if (speed > HUNT_SPEED and self.tracker.reversals() >= 2
+            if (speed > HUNT_SPEED and self.tracker.reversals(t_now) >= 2
                     and abs(cx - cat_cx) < HUNT_RANGE):
                 events.append("hunt")
             # teasing cursor right in front of her face -> paw bat (P26)

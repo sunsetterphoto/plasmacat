@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
 from PySide6.QtCore import QElapsedTimer, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import QWidget
 from plasmacat.bridge.desktop import DesktopState
 from plasmacat.cat.brain import Household
 from plasmacat.cat.cat import Cat
-from plasmacat.cat.interactions import InteractionDetector
+from plasmacat.cat.interactions import CursorTracker, InteractionDetector
 from plasmacat.cat.minigames import MouseHunt
 from plasmacat.cat.render import SpriteBank, prop_pixmap
 from plasmacat.cat.toys import ToyManager
@@ -253,8 +254,10 @@ class Overlay(QWidget):
         bridge.workAreasChanged.connect(self._on_work_areas)
         bridge.keyEvent.connect(self._on_key_event)  # P42 control mode
 
-        # NOTE: the detector owns the single CursorTracker — feed it, not a copy.
-        self._detector = InteractionDetector()
+        # ONE CursorTracker (fed here, D13); one InteractionDetector per cat
+        # sharing it, so each cat keeps its own stroke/rub accumulators
+        self._tracker = CursorTracker()
+        self._detectors: dict[int, InteractionDetector] = {}
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -721,7 +724,7 @@ class Overlay(QWidget):
 
     def _on_cursor(self, x: int, y: int) -> None:
         self.desktop.set_cursor(x, y)
-        self._detector.tracker.add(x, y)
+        self._tracker.add(x, y)
 
     def _tick(self) -> None:
         dt = min(self._clock.restart() / 1000.0, 0.1)
@@ -749,8 +752,8 @@ class Overlay(QWidget):
         if any(c.brain.state == "wheel_run" for c in self.cats):
             self._wheel_angle = (self._wheel_angle + 200.0 * dt) % 360.0
 
-        self.desktop.cursor_active = self._detector.tracker.idle_for() < 2.0
-        self.desktop.cursor_speed = self._detector.tracker.speed()
+        self.desktop.cursor_active = self._tracker.idle_for() < 2.0
+        self.desktop.cursor_speed = self._tracker.speed(time.monotonic())
         # greeting when the human returns after >60 s away
         if self.desktop.cursor_active:
             if self._inactive_since is not None:
@@ -761,18 +764,16 @@ class Overlay(QWidget):
         elif self._inactive_since is None:
             self._inactive_since = self._time
         self._update_active()
-        # interactions (P47): the cat UNDER the cursor is ticked first with
-        # the real dt, so its stroke/rub accumulators advance; the others
-        # only watch for teasing (shared detector state must not double-tick)
-        cx, cy = self.desktop.cursor
-        ordered = sorted(
-            self.cats,
-            key=lambda c: 0 if self._cat_rect(c).contains(cx, cy) else 1)
-        for i, cat in enumerate(ordered):
+        # interactions: every cat has its own detector on the shared tracker
+        live = {id(c) for c in self.cats}
+        for key in [k for k in self._detectors if k not in live]:
+            del self._detectors[key]  # a removed cat
+        for cat in self.cats:
+            det = self._detectors.setdefault(
+                id(cat), InteractionDetector(self._tracker))
             rect = self._cat_rect(cat)
-            events = self._detector.tick(
-                dt if i == 0 else 0.0,
-                (rect.x(), rect.y(), rect.width(), rect.height()),
+            events = det.tick(
+                dt, (rect.x(), rect.y(), rect.width(), rect.height()),
                 self.desktop.cursor)
             for ev in events:
                 if self.debug:

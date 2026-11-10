@@ -590,6 +590,7 @@ def main() -> None:
     # the hunt trigger must not interrupt private business
     catH5 = Cat(500, 1080, rng=random.Random(105))
     catH5.brain.state = "littering"
+    dH.cursor_active = True  # a live cursor: only the state guard may block
     catH5.brain.on_hunt_trigger(catH5.body, (600, 900), dH)
     assert catH5.brain.state == "littering", "hunt interrupted the litter box"
     catH5.brain.state = "wheel_run"
@@ -649,6 +650,7 @@ def main() -> None:
     catHA = Cat(500, 1080, rng=random.Random(110))
     catHA.tick(DT, dH)
     dH.set_cursor(600, 1000)
+    dH.cursor_active = True  # hunt reflexes need a live cursor
     catHA.brain.on_hunt_trigger(catHA.body, (600.0, 1000.0), dH)
     catHA.brain.state_left = 4.0
     seenW: set[str] = set()
@@ -948,6 +950,7 @@ def main() -> None:
     catL5.tick(DT, dL)
     catL5.brain._level = "back"
     catL5.brain._level_t = 5.0
+    dL.cursor_active = True  # hunt reflexes need a live cursor
     catL5.brain.on_hunt_trigger(catL5.body, (600.0, 900.0), dL)
     assert catL5.brain.state == "hunt_stalk"
     catL5.tick(DT, dL)
@@ -1233,6 +1236,7 @@ def main() -> None:
     # reflexes never seize a user-driven cat
     while catU.body.airborne:
         catU.tick(DT, dU)
+    dU.cursor_active = True  # a live cursor: only the user guard may block
     catU.brain.on_hunt_trigger(catU.body, (900, 900), dU)
     assert catU.brain.state == "user", catU.brain.state
     catU.brain.on_startle(catU.body, dU)
@@ -1565,6 +1569,7 @@ def main() -> None:
     catS1.brain._level = "front"
     catS1.brain.state = "cuddle"
     assert catS1.brain._committed_level(catS1.body) is None
+    dS.cursor_active = True  # a live cursor: only the state guard may block
     catS1.brain.on_hunt_trigger(catS1.body, (600.0, 900.0), dS)
     assert catS1.brain.state == "cuddle", "hunt interrupted a cuddle"
 
