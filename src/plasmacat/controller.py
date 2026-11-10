@@ -168,6 +168,34 @@ class AppController(QObject):
     def start_hunt(self) -> None:
         self.overlay.start_mouse_hunt()
 
+    def remove_toy(self, toy) -> None:
+        if toy in self.overlay.toys.toys:
+            self.overlay.toys.toys.remove(toy)
+            for cat in self.cats:           # nobody keeps hunting a toy that is gone
+                if cat.brain._play_toy_target is toy or cat.brain._gift_toy is toy:
+                    cat.brain.clear_toy_state()
+            self.overlay._furn_update_all()
+            self.overlay.update()
+            self.changed.emit()
+
+    def toss_toy(self, toy) -> None:
+        """A little throw: the toy hops away, cats take notice."""
+        import random
+        toy.vx = random.choice((-1, 1)) * random.uniform(260, 420)
+        toy.vy = -random.uniform(380, 520)
+        toy.y -= 4
+        for cat in self.cats:
+            cat.brain.needs["play"] = max(0.0, cat.brain.needs["play"] - 8)
+
+    def move_toy(self, toy) -> None:
+        kind = toy.kind
+        self.remove_toy(toy)
+        self.place(kind)
+
+    def open_center(self, tab: str = "cats") -> None:
+        if self.show_control_center is not None:
+            self.show_control_center(tab)
+
     def clear_toys(self) -> None:
         self.overlay.clear_toys()
         self.changed.emit()

@@ -30,8 +30,7 @@ class FurnitureLayer(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
-            | Qt.WindowType.WindowTransparentForInput
-        )
+        )   # click-through except over cats/props: see Overlay.update_input_masks
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.winId()  # realize so windowHandle() exists for setScreen
@@ -41,6 +40,11 @@ class FurnitureLayer(QWidget):
 
     def refresh(self) -> None:
         self.update()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        pos = event.position()
+        self.o.handle_click(pos.x() + self._ox, pos.y() + self._oy, event.button(),
+                            event.globalPosition().toPoint(), self)
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         o = self.o

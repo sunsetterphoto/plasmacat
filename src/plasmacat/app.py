@@ -126,6 +126,7 @@ def run(argv: list[str]) -> int:
     from plasmacat.bridge.panels import PanelDock
     from plasmacat.controller import AppController
     from plasmacat.sound.player import SoundPlayer
+    from plasmacat.ui.context_menus import show_menu
     from plasmacat.ui.control_center import ControlCenter
     from plasmacat.ui.first_run import first_run
     from plasmacat.ui.tray import Tray
@@ -181,6 +182,7 @@ def run(argv: list[str]) -> int:
     ctl.quit_requested = app.quit
     tray = Tray(ctl, center, app)
     overlay.notify = tray.notify
+    overlay.context_requested = lambda thing, pos, widget: show_menu(ctl, thing, pos, widget)
     ctl.watch_updates()
     tray.icon.messageClicked.connect(ctl.notification_clicked)
     if ctl.is_installed_copy() and settings.auto_update:   # also check at startup

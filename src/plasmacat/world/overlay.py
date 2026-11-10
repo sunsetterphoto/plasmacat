@@ -20,8 +20,8 @@ import math
 import random
 import time
 
-from PySide6.QtCore import QElapsedTimer, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
+from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QRegion
 from PySide6.QtWidgets import QWidget
 
 from plasmacat.bridge.desktop import DesktopState
@@ -69,7 +69,6 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
-            | Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -136,6 +135,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         self.notify = None  # optional callback(title, msg) set by the app
         self._hidden: set[str] = set()   # reasons to hide all windows
         self.last_notify_kind: str | None = None
+        self.context_requested = None    # callback(thing, global_pos, widget)
         self._bridge = bridge
         self.furniture_layers = [FurnitureLayer(self, s)
                                  for s in QGuiApplication.screens()]
@@ -216,6 +216,95 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
         """A fullscreen window is active (video, game): step aside."""
         self._fullscreen_active = on
         self.set_hidden("fullscreen", on and self.settings.hide_on_fullscreen)
+
+    # -- clicks: right-click menus, petting -------------------------------------
+
+    def _toy_rect(self, toy) -> QRect:
+        pm = self._props.get(toy.kind)
+        if pm is None:
+            return QRect()
+        return QRect(int(toy.x) - lw(pm) // 2 - 4, int(toy.y) - lh(pm) - 4,
+                     lw(pm) + 8, lh(pm) + 8)
+
+    def _puke_rects(self) -> list[QRect]:
+        return [self._bowl_rect(px, "puke") for px in self.cat.brain.puke_spots]
+
+    def thing_at(self, x: float, y: float):
+        """What is under a world point: ('cat', cat) | ('toy', toy) |
+        ('puke', index) | ('prop', kind, index) | ('status',) | None."""
+        pt = QPoint(int(x), int(y))
+        for cat in self.cats:
+            if self._cat_rect(cat).contains(pt):
+                return ("cat", cat)
+        for toy in self.toys.toys:
+            if toy.kind in ("ball", "plush") and self._toy_rect(toy).contains(pt):
+                return ("toy", toy)
+        for i, r in enumerate(self._puke_rects()):
+            if r.adjusted(-4, -8, 4, 4).contains(pt):
+                return ("puke", i)
+        hit = self._prop_at(x, y)
+        if hit is not None:
+            return ("prop", hit[0], hit[1])
+        if self._status_rect().contains(pt):
+            return ("status",)
+        return None
+
+    def interactive_rects(self, layer: str) -> list[QRect]:
+        """World rects that take mouse input on a layer; everything else
+        stays click-through. 'front' = the cat window, 'back' = furniture."""
+        if layer == "front":
+            return [self._cat_rect(c) for c in self.cats if self.cat_layer(c) != "back"]
+        rects = [self._cat_rect(c) for c in self.cats if self.cat_layer(c) == "back"]
+        rects += [self._prop_rect(k, i) for k, _l, i in self.furniture_items()]
+        rects += [self._toy_rect(t) for t in self.toys.toys if t.kind in ("ball", "plush")]
+        rects += self._puke_rects()
+        if not self._status_rect().isNull():
+            rects.append(self._status_rect())
+        return [r for r in rects if not r.isNull()]
+
+    def update_input_masks(self, force: bool = False) -> None:
+        """Wayland input regions: clicks reach us only over cats and things;
+        while placing or arranging, the front window takes the whole screen."""
+        nowhere = QRegion(QRect(-9, -9, 1, 1))
+        if self._placing or self._arranging:
+            front = QRegion()                       # no mask = everything
+        else:
+            ox, oy = self._origin()
+            front = QRegion()
+            for r in self.interactive_rects("front"):
+                front += r.translated(-ox, -oy)
+            if front.isEmpty():
+                front = nowhere
+        back_rects = self.interactive_rects("back")
+        masks = [(self, front)]
+        for layer in self.furniture_layers:
+            reg = QRegion()
+            for r in back_rects:
+                reg += r.translated(-layer._ox, -layer._oy)
+            reg = reg.intersected(QRegion(layer.rect()))
+            masks.append((layer, nowhere if reg.isEmpty() else reg))
+        key = tuple((id(w), tuple((r.x(), r.y(), r.width(), r.height()) for r in reg))
+                    for w, reg in masks)
+        if not force and key == getattr(self, "_mask_key", None):
+            return
+        self._mask_key = key
+        for w, reg in masks:
+            handle = w.windowHandle()
+            if handle is not None:
+                handle.setMask(reg)
+                w.update()      # the region is committed with the next frame
+
+    def handle_click(self, x: float, y: float, button, global_pos, widget) -> None:
+        """A click on a cat or a thing (world coords). Right: its menu.
+        Left on a cat: a pet."""
+        thing = self.thing_at(x, y)
+        if thing is None:
+            return
+        if button == Qt.MouseButton.RightButton:
+            if self.context_requested is not None:
+                self.context_requested(thing, global_pos, widget)
+        elif button == Qt.MouseButton.LeftButton and thing[0] == "cat":
+            thing[1].brain.on_stroke(thing[1].body)
 
     def set_hidden(self, reason: str, on: bool) -> None:
         """Hide every PlasmaCat window while any reason holds ('pause' from
@@ -874,6 +963,7 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
                 and self.cat.brain.wheel_x is not None:
             self._furn_update(self._wheel_rect())
         self._sync_window_geometry()
+        self.update_input_masks()
         if self.debug:
             self.update()  # platform lines may change anytime
 

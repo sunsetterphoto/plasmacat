@@ -69,13 +69,13 @@ def main() -> None:
     assert o.windowTitle() == "plasmacat", o.windowTitle()
     assert o.isFullScreen(), "placement needs the fullscreen window"
     from PySide6.QtCore import Qt
-    assert not (o.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+    assert o.windowHandle().mask().isEmpty()        # placing: the whole screen takes input
     o._end_placement()
     app.processEvents()
     assert o._placing is None
     assert not o.isFullScreen(), "must return to the small window"
     assert o.windowTitle().startswith("plasmacat@"), o.windowTitle()
-    assert o.windowFlags() & Qt.WindowType.WindowTransparentForInput
+    assert not o.windowHandle().mask().isEmpty()    # click-through again (input mask)
 
     # 6. P40: each litter deposit renders as one pile inside the tray
     o.cat.brain.litter_x = 400.0
