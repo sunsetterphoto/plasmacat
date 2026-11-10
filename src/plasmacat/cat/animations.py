@@ -18,6 +18,8 @@ ANIMATIONS: dict[str, Animation] = {
     "jump": Animation(fps=1, loop=False),
     "sit": Animation(fps=2),
     "sit_blink": Animation(fps=1, loop=False),
+    "stand_blink": Animation(fps=1, loop=False),
+    "loaf_blink": Animation(fps=1, loop=False),
     "beg": Animation(fps=3),
     "groom": Animation(fps=2),
     "ear_fold": Animation(fps=1, loop=False),

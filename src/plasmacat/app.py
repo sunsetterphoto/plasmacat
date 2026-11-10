@@ -504,4 +504,5 @@ def run(argv: list[str]) -> int:
 
     app.aboutToQuit.connect(shutdown)
     install_signal_handlers(app, app.quit)
+    QTimer.singleShot(0, lambda: print("[app] ready", flush=True))
     return app.exec()

@@ -11,8 +11,8 @@ def test_art_pixel_is_integer_device_pixels(qapp, dpr):
     n = art_pixel_device(dpr, "normal")
     assert isinstance(n, int) and n >= 1
     pm = SpriteBank(device_px=n, dpr=dpr).frame("sit", 0)
-    assert pm.width() == sprites.CANVAS_W * n          # device pixels
-    assert pm.height() == sprites.CANVAS_H * n
+    assert pm.width() == sprites.GRID_W * n          # device pixels
+    assert pm.height() == sprites.GRID_H * n
     assert pm.devicePixelRatio() == pytest.approx(dpr)
 
 
@@ -21,8 +21,8 @@ def test_logical_size_matches_dpr(qapp, dpr):
     n = art_pixel_device(dpr, "normal")
     pm = SpriteBank(device_px=n, dpr=dpr).frame("sit", 0)
     w, h = logical_size(pm)
-    assert w == round(sprites.CANVAS_W * n / dpr)
-    assert h == round(sprites.CANVAS_H * n / dpr)
+    assert w == round(sprites.GRID_W * n / dpr)
+    assert h == round(sprites.GRID_H * n / dpr)
 
 
 def test_pixel_size_preferences_at_165():

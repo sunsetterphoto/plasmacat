@@ -33,9 +33,19 @@ def _run_and_signal(tmp_path: Path, sig: int) -> tuple[subprocess.CompletedProce
     start = time.time()
     proc = subprocess.Popen([sys.executable, "-m", "plasmacat.main"], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    time.sleep(3.0)
+    lines = []
+    deadline = time.time() + 60
+    while time.time() < deadline:          # wait until the event loop runs
+        line = proc.stdout.readline()
+        if not line:
+            break
+        lines.append(line)
+        if "[app] ready" in line:
+            break
+    time.sleep(0.5)
     proc.send_signal(sig)
-    out, _ = proc.communicate(timeout=15)
+    rest, _ = proc.communicate(timeout=15)
+    out = "".join(lines) + rest
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, ""), save, start
 
 

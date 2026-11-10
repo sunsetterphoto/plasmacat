@@ -389,11 +389,8 @@ class Overlay(WindowPolicyMixin, PlacementMixin, StatusBoardMixin, QWidget):
     def _anim_key(self, cat: Cat) -> str:
         """Animation state + blink + mood-dependent tail variant (P12a/P8g)."""
         state = cat.anim_state
-        if cat.blink_active:
-            if state == "stand":
-                return "enjoy"          # same pose, eyes closed
-            if state == "sit":
-                return "sit_blink"
+        if cat.blink_active and state in ("stand", "sit", "loaf"):
+            return state + "_blink"     # same pose, eyes closed
         if state in ("stand", "walk"):
             mood = cat.brain.mood
             if mood < 40:
