@@ -250,7 +250,6 @@ class Overlay(QWidget):
 
         bridge.cursorChanged.connect(self._on_cursor)
         bridge.windowsChanged.connect(self.desktop.set_windows)
-        bridge.workAreaChanged.connect(self._on_work_area)
         bridge.workAreasChanged.connect(self._on_work_areas)
         bridge.keyEvent.connect(self._on_key_event)  # P42 control mode
 
@@ -356,9 +355,6 @@ class Overlay(QWidget):
         br, bl = self._make_banks(cust, self.scale, cat.brain.stage)
         self._banks[cat] = (br, bl, cat.brain.stage)
         self.update()
-
-    def _on_work_area(self, d: dict) -> None:
-        self._on_work_areas([d])
 
     def _on_work_areas(self, areas: list[dict]) -> None:
         self.desktop.set_work_areas(areas)

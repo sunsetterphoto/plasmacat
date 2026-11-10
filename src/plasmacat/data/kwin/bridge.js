@@ -11,8 +11,8 @@ const OBJPATH = "/Bridge";
 // Interface name: QtDBus auto-generates it from the shiboken metaobject and it
 // is NONDETERMINISTIC (e.g. 'local.py.main.BridgeService' or
 // 'local.plasmacat.BridgeService'). bridge/kwin.py introspects the running app
-// and replaces __CATGAME_IFACE__ with the discovered name (see DECISIONS.md D10).
-const IFACE = "__CATGAME_IFACE__";
+// and replaces __PLASMACAT_IFACE__ with the discovered name (see DECISIONS.md D10).
+const IFACE = "__PLASMACAT_IFACE__";
 
 const CURSOR_INTERVAL_MS = 33; // ~30 Hz
 var lastCursorSent = 0;

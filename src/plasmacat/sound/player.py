@@ -1,8 +1,6 @@
-"""Sound playback: the natural pack (real recordings, mute/volume,
-per-effect cooldowns).
-
-All effects are real cat recordings (see assets/sounds/natural/ATTRIBUTION.md);
-the synthesized 8-bit pack was removed in P49.
+"""Sound playback: real cat recordings with mute/volume and per-effect
+cooldowns. The WAVs ship in plasmacat/data/sounds (see ATTRIBUTION.md there)
+and are played in place — nothing is copied to the user's data dir.
 
 Primary backend: QtMultimedia QSoundEffect. Fallback: `pw-play`/`paplay`
 subprocess (if the Qt backend reports an error on this system).
@@ -20,17 +18,16 @@ from PySide6.QtMultimedia import QSoundEffect
 
 
 class SoundPlayer:
-    def __init__(self, sounds_root: Path, muted: bool = False,
+    def __init__(self, sounds_dir: Path, muted: bool = False,
                  volume: float = 0.7) -> None:
-        self.sounds_root = sounds_root
+        self.sounds_dir = sounds_dir
         self.muted = muted
         self.volume = volume
         self._effects: dict[str, QSoundEffect] = {}
         self._last: dict[str, float] = {}
         self._qt_ok = True
         self._player_bin = shutil.which("pw-play") or shutil.which("paplay")
-        natural = self.sounds_root / "natural"
-        for wav in sorted(natural.glob("*.wav")):
+        for wav in sorted(self.sounds_dir.glob("*.wav")):
             self._load(wav.stem, wav, self.volume)
         if self._effects:
             first = next(iter(self._effects.values()))
@@ -52,7 +49,7 @@ class SoundPlayer:
         if self._qt_ok and name in self._effects:
             self._effects[name].play()
         elif self._player_bin:
-            wav = self.sounds_root / "natural" / f"{name}.wav"
+            wav = self.sounds_dir / f"{name}.wav"
             if wav.exists():
                 subprocess.Popen(
                     [self._player_bin, str(wav)],

@@ -5,8 +5,8 @@ Usage:
   python -m plasmacat.main --unload-bridge       unload a leftover KWin script and exit
 
 First run (no save file) opens the customization wizard. State is saved to
-~/.local/share/catgame/save.json every 30 s and on quit (the app name stays
-'catgame' for save continuity across the PlasmaCat rename, P33).
+~/.local/share/plasmacat/save.json every 30 s and on quit (an old
+~/.local/share/catgame dir is migrated once at startup).
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = ROOT / "kwin" / "plasmacat-bridge.js"
-DESKTOP_FILE = ROOT / "plasmacat.desktop"
+from plasmacat import paths
+
+ROOT = Path(__file__).resolve().parents[2]  # checkout root (run.sh lives here)
 
 
 def _xdg_dir(location) -> Path:
@@ -59,7 +59,7 @@ def set_autostart(enabled: bool) -> None:
 
 def _install_desktop_file(target: Path) -> None:
     """Install our desktop file with Exec pointing at this checkout."""
-    lines = DESKTOP_FILE.read_text(encoding="utf-8").splitlines()
+    lines = paths.data_file("plasmacat.desktop").read_text(encoding="utf-8").splitlines()
     lines = [f"Exec={ROOT / 'run.sh'}" if line.startswith("Exec=") else line
              for line in lines]
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -85,25 +85,23 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # tray app: no normal windows
-    # NOTE: the data dir stays 'catgame' (~/.local/share/catgame) so existing
-    # saves survive the PlasmaCat rename (P33)
-    QCoreApplication.setApplicationName("catgame")
+    QCoreApplication.setApplicationName("plasmacat")
     QGuiApplication.setDesktopFileName("plasmacat")  # app_id -> KWin resourceClass
-    _icon_png = ROOT / "assets" / "icons" / "plasmacat-256.png"
-    if _icon_png.exists():  # repo checkout (pip installs fall back to theme)
-        app.setWindowIcon(QIcon(str(_icon_png)))
+    app.setWindowIcon(QIcon(str(paths.data_file("icons/plasmacat-256.png"))))
 
     from plasmacat.bridge.kwin import KWinBridge
     from plasmacat.cat.brain import NEED_DECAY, offline_aging
     from plasmacat.cat.render import SpriteBank
     from plasmacat.overlay import Overlay
     from plasmacat.persist import CatState, Customization, GameState
-    from plasmacat.sound.packs import SoundPlayer
+    from plasmacat.sound.player import SoundPlayer
     from plasmacat.ui.wizard import SetupWizard
     from plasmacat import persist
 
-    data_dir = Path(QStandardPaths.writableLocation(
-        QStandardPaths.StandardLocation.AppDataLocation))
+    if paths.migrate_legacy():
+        print("[persist] migrated ~/.local/share/catgame -> plasmacat")
+    data_dir = paths.state_dir()
+    shutil.rmtree(data_dir / "sounds", ignore_errors=True)  # old sound copies (<0.2)
     save_path = data_dir / "save.json"
 
     # -- load state / first-run wizard ----------------------------------------
@@ -114,22 +112,14 @@ def main() -> int:
         if wiz.exec() == QDialog.DialogCode.Accepted:
             cust = wiz.result_customization()
 
-    bridge = KWinBridge(str(SCRIPT_PATH))
+    bridge = KWinBridge(str(paths.data_file("kwin/bridge.js")))
     if not bridge.start():
         print("Could not start PlasmaCat: another instance is running or KWin "
               "refused the helper script. Try: ./run.sh --unload-bridge")
         return 1
     bridge.start_watchdog(app)  # reloads the script if Plasma/KWin restarts
 
-    # the natural pack (real recordings, P49) ships in the repo (assets/)
-    # and is copied to the data dir on first run
-    natural_src = ROOT / "assets" / "sounds" / "natural"
-    natural_dst = data_dir / "sounds" / "natural"
-    natural_dst.mkdir(parents=True, exist_ok=True)
-    for f in natural_src.glob("*.*"):
-        if not (natural_dst / f.name).exists():
-            shutil.copy2(f, natural_dst / f.name)
-    player = SoundPlayer(data_dir / "sounds",
+    player = SoundPlayer(paths.data_file("sounds"),
                          muted=not cust.sound_on, volume=cust.volume)
 
     overlay = Overlay(bridge, player=player, cust=cust, debug="--debug" in sys.argv)

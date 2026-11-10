@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Generate the PlasmaCat app icon from the procedural sprite art (so the
 icon always matches the cat): the sit pose on a dark rounded tile, exported
-in the standard hicolor sizes to assets/icons/.
+in the standard hicolor sizes to src/plasmacat/data/icons/.
 
 Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python tools/make_icon.py
 """
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication
 from plasmacat.cat.render import SpriteBank
 
 SIZES = (256, 128, 64, 48, 32, 22, 16)
-OUT = Path(__file__).resolve().parents[1] / "assets" / "icons"
+OUT = Path(__file__).resolve().parents[1] / "src" / "plasmacat" / "data" / "icons"
 
 # tile look: the status-board slate, lit softly from the top left
 BG_TOP = QColor(52, 52, 68)

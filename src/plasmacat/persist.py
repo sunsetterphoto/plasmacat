@@ -1,7 +1,7 @@
 """Persistence: save/load game state as JSON, with offline need decay.
 
-Save file: <AppDataLocation>/save.json (Linux: ~/.local/share/catgame/save.json —
-the app name stays 'catgame' for save continuity across the PlasmaCat rename).
+Save file: ~/.local/share/plasmacat/save.json (see paths.state_dir; an old
+~/.local/share/catgame dir is migrated at startup).
 Pure json/dataclasses, no Qt — testable headless.
 """
 

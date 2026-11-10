@@ -1,10 +1,9 @@
 """Bridge to KWin: loads the helper KWin script and hosts the DBus service it calls.
 
-The KWin script (kwin/plasmacat-bridge.js) pushes data to us via callDBus:
+The KWin script (plasmacat/data/kwin/bridge.js) pushes data to us via callDBus:
   SetCursor("x,y")       -> cursorChanged(int, int)     (~30 Hz while moving)
   SetWindows("[...]")    -> windowsChanged(list[dict])  (on any window change)
   SetWorkAreas("[...]")  -> workAreasChanged(list[dict]) (one work area per screen, P38)
-  SetWorkArea("{...}")   -> workAreaChanged(dict)       (legacy single-area form)
   OverlayTagged("...")   -> overlayTagged(str)          (our overlay got keepAbove etc.)
   KeyEvent("left")       -> keyEvent(str)               (P42 control-mode shortcuts)
 All DBus arguments are single strings (DECISIONS.md D3).
@@ -12,8 +11,8 @@ All DBus arguments are single strings (DECISIONS.md D3).
 IMPORTANT (DECISIONS.md D10): the DBus interface name QtDBus auto-generates for a
 Python QObject is NONDETERMINISTIC (seen: 'local.py.main.BridgeService',
 'local.plasmacat.BridgeService'). We therefore introspect ourselves at startup and
-inject the discovered name into the JS template (__CATGAME_IFACE__ placeholder),
-writing the concrete script to kwin/plasmacat-bridge.runtime.js.
+inject the discovered name into the JS template (__PLASMACAT_IFACE__ placeholder),
+writing the concrete script to $XDG_RUNTIME_DIR/plasmacat/bridge.js.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from PySide6.QtDBus import QDBusConnection, QDBusInterface
 SCRIPT_PLUGIN = "plasmacat-bridge"
 SERVICE = "org.plasmacat.Bridge"
 OBJPATH = "/Bridge"
-IFACE_PLACEHOLDER = "__CATGAME_IFACE__"
+IFACE_PLACEHOLDER = "__PLASMACAT_IFACE__"
 CONTROL_PLACEHOLDER = "__CONTROL_MODE__"  # P42: control-mode key shortcuts
 
 
@@ -37,7 +36,6 @@ class BridgeService(QObject):
 
     cursorChanged = Signal(int, int)
     windowsChanged = Signal(list)
-    workAreaChanged = Signal(dict)
     workAreasChanged = Signal(list)
     overlayTagged = Signal(str)
     keyEvent = Signal(str)  # P42: control-mode key from a KWin shortcut
@@ -58,15 +56,6 @@ class BridgeService(QObject):
             return
         if isinstance(data, list):
             self.windowsChanged.emit(data)
-
-    @Slot(str)
-    def SetWorkArea(self, payload: str) -> None:
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            return
-        if isinstance(data, dict) and {"x", "y", "w", "h"} <= data.keys():
-            self.workAreaChanged.emit(data)
 
     @Slot(str)
     def SetWorkAreas(self, payload: str) -> None:
@@ -97,7 +86,6 @@ class KWinBridge(QObject):
         self.service = BridgeService(self)
         self.cursorChanged = self.service.cursorChanged
         self.windowsChanged = self.service.windowsChanged
-        self.workAreaChanged = self.service.workAreaChanged
         self.workAreasChanged = self.service.workAreasChanged
         self.overlayTagged = self.service.overlayTagged
         self.keyEvent = self.service.keyEvent  # P42
@@ -181,7 +169,7 @@ class KWinBridge(QObject):
             self._reload()
 
     def _render_script(self, bus: QDBusConnection) -> str | None:
-        """Fill __CATGAME_IFACE__ in the JS template with the interface name
+        """Fill __PLASMACAT_IFACE__ in the JS template with the interface name
         discovered by introspecting our own freshly-registered object.
         Retries: right after a previous instance dies, the bus name can briefly
         route to the corpse."""
@@ -218,7 +206,8 @@ class KWinBridge(QObject):
         if CONTROL_PLACEHOLDER not in src:
             print("[bridge] ERROR: template has no control-mode placeholder")
             return None
-        runtime = template.replace(".js", ".runtime.js")
+        from plasmacat.paths import runtime_dir
+        runtime = str(runtime_dir() / "bridge.js")
         with open(runtime, "w", encoding="utf-8") as fh:
             fh.write(src.replace(IFACE_PLACEHOLDER, iface)
                      .replace(CONTROL_PLACEHOLDER,
@@ -249,9 +238,7 @@ class KWinBridge(QObject):
 
 
 def unload_bridge() -> None:
-    """Standalone helper: unload a leftover script (e.g. after a crash).
-    Also cleans up the legacy pre-rename 'catgame-bridge' if present."""
+    """Standalone helper: unload a leftover script (e.g. after a crash)."""
     scripting = QDBusInterface("org.kde.KWin", "/Scripting",
                                "org.kde.kwin.Scripting")
     scripting.call("unloadScript", SCRIPT_PLUGIN)
-    scripting.call("unloadScript", "catgame-bridge")  # legacy name (pre-P33)
