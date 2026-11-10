@@ -219,6 +219,84 @@ class AppController(QObject):
             _autostart_path().unlink(missing_ok=True)
         self.changed.emit()
 
+    # -- updates ------------------------------------------------------------------
+
+    def is_installed_copy(self) -> bool:
+        """Running from the install.sh checkout (the one the timer updates)?"""
+        inst = Path.home() / ".local/share/plasmacat/app"
+        return inst.exists() and not inst.is_symlink() and inst.resolve() == ROOT.resolve()
+
+    def watch_updates(self, app_dir: Path = ROOT) -> None:
+        """Offer a release when the daily check (or 'Check now') found one."""
+        from PySide6.QtCore import QFileSystemWatcher
+        self._app_dir = Path(app_dir)
+        self._marker_seen = self._marker_mtime()
+        self.pending_update: str | None = self._marker_version() if self._marker_seen else None
+        self._watcher = QFileSystemWatcher([str(self._app_dir)], self)
+        self._watcher.directoryChanged.connect(lambda _p: self._check_update_marker())
+
+    def _marker_mtime(self) -> float:
+        try:
+            return (self._app_dir / ".available").stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _marker_version(self) -> str:
+        import json
+        try:
+            return json.loads((self._app_dir / ".available").read_text()).get("version", "")
+        except (OSError, ValueError):
+            return ""
+
+    def _check_update_marker(self) -> None:
+        m = self._marker_mtime()
+        if m <= self._marker_seen:
+            return
+        self._marker_seen = m
+        self.pending_update = self._marker_version() or "a new version"
+        self.overlay._notify("update", "PlasmaCat update",
+                             f"PlasmaCat {self.pending_update} is available — "
+                             "click here to update.")
+        self.changed.emit()
+
+    def _run_updater(self, args: list[str], done: Callable[[str], None]) -> None:
+        """Run the updater in the background (it does git network I/O)."""
+        from PySide6.QtCore import QProcess
+        proc = QProcess(self)
+        proc.setWorkingDirectory(str(ROOT))
+        env = proc.processEnvironment()
+        env.insert("PYTHONPATH", str(ROOT / "src"))
+        proc.setProcessEnvironment(env)
+        proc.setProgram(sys.executable)
+        proc.setArguments(["-m", "plasmacat.updater", *args, str(ROOT)])
+        proc.finished.connect(lambda *_: done(
+            bytes(proc.readAllStandardOutput()).decode(errors="replace").strip()
+            .replace("[plasmacat-update] ", "") or "done"))
+        proc.start()
+        self._update_proc = proc
+
+    def check_updates_now(self, on_done: Callable[[str], None]) -> None:
+        """Ask GitHub for a newer release (offers it via the marker)."""
+        def done(msg: str) -> None:
+            self._check_update_marker()
+            on_done(msg)
+        self._run_updater([], done)
+
+    def apply_update(self, on_done: Callable[[str], None] | None = None) -> None:
+        """Install the offered release, then restart into it."""
+        def done(msg: str) -> None:
+            if on_done is not None:
+                on_done(msg)
+            if msg.startswith("updated"):
+                self.restart()
+        self._run_updater(["--apply"], done)
+
+    def restart(self) -> None:
+        """Save, hand the KWin script over cleanly, and start again."""
+        self.save_now()
+        self.bridge.stop()
+        os.execvpe(sys.executable, [sys.executable, "-m", "plasmacat.main"], os.environ)
+
     def reset_household(self, save_path: Path) -> None:
         """Start over: delete the save and restart into the first-run flow."""
         save_path.unlink(missing_ok=True)

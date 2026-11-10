@@ -101,3 +101,26 @@ def test_home_tab_arrange_button_starts_arrange_mode(cc, ctl):
     cc.tabs["home"].arrange_button.click()
     assert ctl.overlay._arranging
     ctl.overlay._end_placement()
+
+
+def test_available_release_is_offered_once(ctl, tmp_path):
+    import json
+    import time
+    got = []
+    ctl.overlay.notify = lambda title, msg: got.append(msg)
+    ctl.watch_updates(tmp_path)
+    (tmp_path / ".available").write_text(json.dumps({"version": "v9.9.9", "at": time.time()}))
+    ctl._check_update_marker()
+    assert got and "v9.9.9" in got[0] and "click" in got[0]
+    assert ctl.pending_update == "v9.9.9"
+    ctl._check_update_marker()          # only once per release
+    assert len(got) == 1
+
+
+def test_apply_update_runs_the_updater_then_restarts(ctl, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ctl, "_run_updater", lambda args, done: (calls.append(args), done("updated to v9.9.9")))
+    monkeypatch.setattr(ctl, "restart", lambda: calls.append("restart"))
+    ctl.pending_update = "v9.9.9"
+    ctl.apply_update()
+    assert calls == [["--apply"], "restart"]

@@ -50,11 +50,22 @@ class SystemTab(QWidget):
 
         upd = QGroupBox("Updates")
         ul = QVBoxLayout(upd)
-        self.auto_update = QCheckBox("Keep PlasmaCat up to date automatically")
+        self.auto_update = QCheckBox("Check for new versions automatically (you decide "
+                                     "when to install)")
         self.auto_update.toggled.connect(lambda on: ctl.update_settings(auto_update=on))
         ul.addWidget(self.auto_update)
+        line = QHBoxLayout()
         self.version = QLabel()
-        ul.addWidget(self.version)
+        line.addWidget(self.version, 1)
+        self.check_now = QPushButton("Check now")
+        self.check_now.clicked.connect(self._check_now)
+        line.addWidget(self.check_now)
+        self.update_btn = QPushButton("Update")
+        self.update_btn.clicked.connect(self._update)
+        line.addWidget(self.update_btn)
+        ul.addLayout(line)
+        self.update_note = hint("")
+        ul.addWidget(self.update_note)
         lay.addWidget(upd)
 
         danger = QGroupBox("Start over")
@@ -69,6 +80,22 @@ class SystemTab(QWidget):
         lay.addWidget(row)
         lay.addStretch(1)
         self.refresh()
+
+    def _check_now(self) -> None:
+        self.check_now.setEnabled(False)
+        self.update_note.setText("Checking…")
+
+        def done(msg: str) -> None:
+            self.update_note.setText(msg.capitalize())
+            self.check_now.setEnabled(True)
+
+        self.ctl.check_updates_now(done)
+
+    def _update(self) -> None:
+        self.update_btn.setEnabled(False)
+        self.update_note.setText("Installing the update — PlasmaCat restarts by itself…")
+        self.ctl.apply_update(lambda msg: (self.update_note.setText(msg.capitalize()),
+                                           self.update_btn.setEnabled(True)))
 
     def _start_over(self) -> None:
         if self.save_path is None:
@@ -90,6 +117,16 @@ class SystemTab(QWidget):
         except PackageNotFoundError:
             from plasmacat import __version__ as v
         self.version.setText(f"Installed version: {v}")
+        installed = self.ctl.is_installed_copy()
+        self.check_now.setVisible(installed)
+        self.auto_update.setEnabled(installed)
+        pending = getattr(self.ctl, "pending_update", None)
+        self.update_btn.setVisible(bool(pending) and installed)
+        if pending:
+            self.update_btn.setText(f"Update to {pending}")
+        if not installed and not self.update_note.text():
+            self.update_note.setText("Automatic updates work for copies installed with "
+                                     "install.sh (this one runs from a source checkout).")
         pairs = [(self.autostart, self.ctl.autostart_enabled()),
                  (self.fullscreen, s.hide_on_fullscreen),
                  (self.auto_update, s.auto_update)] + \

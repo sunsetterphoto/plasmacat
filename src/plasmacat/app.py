@@ -175,6 +175,10 @@ def run(argv: list[str]) -> int:
     ctl.quit_requested = app.quit
     tray = Tray(ctl, center, app)
     overlay.notify = tray.notify
+    ctl.watch_updates()
+    tray.icon.messageClicked.connect(lambda: ctl.pending_update and ctl.apply_update())
+    if ctl.is_installed_copy() and settings.auto_update:   # also check at startup
+        QTimer.singleShot(20_000, lambda: ctl.check_updates_now(lambda _m: None))
     bridge.activateRequested.connect(lambda: center.show_tab("cats"))
     if "--control" in argv:   # dev shortcut: start in control mode
         ctl.set_control(True)
