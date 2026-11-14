@@ -49,6 +49,52 @@ def test_hidden_panel_without_plasma_info_is_ignored():
     assert refine_floor(area, None) == 1091
 
 
+# -- Krema dock (layer-shell dock, not a Plasma panel) ---------------------------
+# Measured 2026-11-14 on z13g2 (1745x1091 logical): Krema's surface is y=977 h=114
+# (bar + zoom headroom), plus a 1 px probe surface at the screen edge. The visible
+# bar top is surface bottom - (IconSize + 2*8 + FloatingMargin) = 1091 - 68 = 1023.
+
+from plasmacat.bridge.panels import krema_bar_height, read_kremarc  # noqa: E402
+
+KREMA = {"icon_size": 44, "floating": True, "floating_margin": 8}
+
+
+def test_krema_bar_height_follows_krema_formula():
+    assert krema_bar_height(KREMA) == 44 + 16 + 8
+    assert krema_bar_height(dict(KREMA, floating=False)) == 60
+
+
+def test_krema_dock_floor_on_its_visible_bar():
+    area = dict(AREA, h=953, y=32, panels=[
+        {"y": 1090, "h": 1, "reserved": 0, "hidden": False, "cls": "krema"},
+        {"y": 977, "h": 114, "reserved": 0, "hidden": False, "cls": "krema"}])
+    assert refine_floor(area, [], KREMA) == 1023
+
+
+def test_krema_matched_by_desktop_file_name_too():
+    area = dict(AREA, h=985, panels=[{"y": 977, "h": 114, "reserved": 0, "cls": "com.bhyoo.krema"}])
+    assert refine_floor(area, None, KREMA) == 1023
+
+
+def test_krema_dodging_keeps_the_floor():
+    # dodge slides the bar off-screen inside the surface; the surface stays
+    area = dict(AREA, h=1091, panels=[{"y": 977, "h": 114, "reserved": 0, "hidden": True, "cls": "krema"}])
+    assert refine_floor(area, [], KREMA) == 1023
+
+
+def test_one_pixel_edge_surfaces_never_carry_the_floor():
+    area = dict(AREA, h=1090, panels=[{"y": 1090, "h": 1, "reserved": 0, "hidden": False}])
+    assert refine_floor(area, []) == 1091
+
+
+def test_read_kremarc_defaults_and_values(tmp_path):
+    assert read_kremarc(tmp_path / "missing") == {"icon_size": 48, "floating": True,
+                                                  "floating_margin": 8}
+    rc = tmp_path / "kremarc"
+    rc.write_text("[General]\nIconSize=44\nFloating=false\nFloatingMargin=12\n")
+    assert read_kremarc(rc) == {"icon_size": 44, "floating": False, "floating_margin": 12}
+
+
 # -- docking the bottom panel while PlasmaCat runs --------------------------------
 
 from plasmacat.bridge.panels import PanelDock  # noqa: E402

@@ -7,6 +7,10 @@ bridge sends each screen's bottom panels; the floor sits on the visible top:
   floating:  frame top + (frame height - thickness) / 2
   docked:    frame top
 Panels that can't be matched keep the bridge's estimate.
+
+Krema (a layer-shell dock, not a Plasma panel) is recognised by its window
+class; its surface includes zoom headroom above the bar, so the visible bar
+top is computed with Krema's own formula from ~/.config/kremarc.
 """
 
 from __future__ import annotations
@@ -49,18 +53,78 @@ def _match(panel: dict, plasma: list[dict]) -> tuple[dict, float] | None:
     return None
 
 
-def refine_floor(area: dict, plasma: list[dict] | None) -> float:
+# -- Krema --------------------------------------------------------------------
+# Krema 0.13 (src/utils/surfacegeometry.h, dockview.cpp): bar height =
+# IconSize + 2 * s_padding (8) + floatingPadding (FloatingMargin if Floating).
+# The surface's bottom edge is the screen edge; the bar sits at its bottom.
+KREMA_PADDING = 8
+KREMA_DEFAULTS = {"icon_size": 48, "floating": True, "floating_margin": 8}
+
+
+def is_krema(panel: dict) -> bool:
+    return "krema" in str(panel.get("cls", "")).lower()
+
+
+def read_kremarc(path=None) -> dict:
+    """Krema's dock geometry settings ([General] in kremarc), with Krema's defaults."""
+    import configparser
+    from pathlib import Path
+    import os
+    if path is None:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        path = Path(base) / "kremarc"
+    out = dict(KREMA_DEFAULTS)
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    cp.optionxform = str
+    try:
+        cp.read(path, encoding="utf-8")
+    except (OSError, configparser.Error):
+        return out
+    if not cp.has_section("General"):
+        return out
+    g = cp["General"]
+    try:
+        out["icon_size"] = int(g.get("IconSize", out["icon_size"]))
+        out["floating_margin"] = int(g.get("FloatingMargin", out["floating_margin"]))
+    except ValueError:
+        pass
+    out["floating"] = g.get("Floating", "true").strip().lower() in ("true", "1", "yes")
+    return out
+
+
+def krema_bar_height(rc: dict) -> int:
+    return (int(rc["icon_size"]) + 2 * KREMA_PADDING
+            + (int(rc["floating_margin"]) if rc.get("floating") else 0))
+
+
+def refine_floor(area: dict, plasma: list[dict] | None, krema: dict | None = None) -> float:
     """The floor y of one work area (absolute).
 
     Stable on purpose: a panel that only dodges windows keeps carrying the
     floor while it is hidden (otherwise cats and furniture would jump every
-    time a window touches it); an auto-hide panel never carries it."""
+    time a window touches it); an auto-hide panel never carries it.
+    A Krema dock carries the floor on its visible bar (also while it dodges);
+    1 px edge surfaces (Krema's screen-edge probe) never carry it."""
     estimate = float(area["y"]) + float(area["h"])
-    panels = area.get("panels") or []
-    if not plasma or not panels:
-        return estimate
+    raw_bottom = float(area.get("raw_bottom", estimate))
+    panels = [p for p in (area.get("panels") or []) if float(p.get("h", 0)) > 2]
+    if not panels:
+        return raw_bottom if area.get("panels") else estimate
     tops = []
+    rest = []
     for panel in panels:
+        if is_krema(panel):
+            rc = krema if krema is not None else read_kremarc()
+            tops.append(float(panel["y"]) + float(panel["h"]) - krema_bar_height(rc))
+        else:
+            rest.append(panel)
+    if rest and not plasma:
+        if not tops:
+            return estimate
+        # unknown panels next to a Krema dock: the bridge's estimate covers the visible ones
+        unknown = estimate if any(not p.get("hidden") for p in rest) else raw_bottom
+        return min([unknown] + tops)
+    for panel in rest:
         m = _match(panel, plasma)
         if m is None:
             if panel.get("hidden"):
@@ -70,7 +134,7 @@ def refine_floor(area: dict, plasma: list[dict] | None) -> float:
         if settings.get("hiding") == "autohide":
             continue
         tops.append(top)
-    return min([float(area.get("raw_bottom", estimate))] + tops)
+    return min([raw_bottom] + tops)
 
 
 # -- docking the bottom panel while PlasmaCat runs -------------------------------
