@@ -86,3 +86,13 @@ def test_manual_check_works_when_automatic_checks_are_off(repos, tmp_path):
     save.write_text(json.dumps({"settings": {"auto_update": False}}))
     st = updater.check(app, save_path=save, manual=True)
     assert st.available == "v0.2.1"
+
+
+def test_a_retagged_release_upstream_does_not_block_updates(repos):
+    # A mirror re-wrote v0.2.0 upstream (different tag object, measured
+    # 2026-11-14): a plain `git fetch --tags` refuses to clobber the local tag
+    # and exits 1, so no update was ever seen again. Upstream tags win.
+    origin, app = repos
+    git(origin, "tag", "-f", "-a", "v0.2.0", "-m", "re-tagged by the mirror", "v0.2.0")
+    st = updater.check(app)
+    assert st.available == "v0.2.1", st.message

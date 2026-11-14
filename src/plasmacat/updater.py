@@ -75,7 +75,9 @@ def check(app: Path, save_path: Path | None = None, apply: bool = False,
         if _git(app, "status", "--porcelain", "--untracked-files=no"):
             return UpdateStatus(current_version(app), None, False,
                                 "local changes in the install dir — not touching it")
-        _git(app, "fetch", "--quiet", "--tags", "origin")
+        # --force: upstream tags win. A mirror may re-write a release tag; a plain
+        # `fetch --tags` then refuses to clobber the local one and fails for good.
+        _git(app, "fetch", "--quiet", "--tags", "--force", "origin")
         tags = [t for t in _git(app, "tag", "--list", "v*").split() if TAG_RE.match(t)]
         if not tags:
             return UpdateStatus(current_version(app), None, False, "no releases found")

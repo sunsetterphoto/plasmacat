@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 — 2026-11-14
+
+### Fixed
+- **Updater**: a release tag re-written upstream (e.g. by a repository mirror)
+  no longer blocks every update check. `git fetch --tags` refused to overwrite
+  the local tag and failed, so new releases were never offered.
+
 ## 0.2.2 — 2026-11-14
 
 ### Fixed
