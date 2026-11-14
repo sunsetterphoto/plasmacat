@@ -165,7 +165,16 @@ test("work areas carry the raw bottom and the panels for refinement", () => {
   ctx.sendWorkAreas();
   const a = JSON.parse(calls.find((c) => c.method === "SetWorkAreas").payload)[0];
   assert.equal(a.raw_bottom, 1091);
-  assert.deepEqual(a.panels, [{ y: 1047, h: 44, reserved: 0, hidden: false }]);
+  assert.deepEqual(a.panels, [{ y: 1047, h: 44, reserved: 0, hidden: false, cls: "plasmashell" }]);
+});
+
+test("a Krema dock is reported with its class so the app can find its bar", () => {
+  const dock = makeWindow({ dock: true, normalWindow: false, resourceClass: "krema",
+                            frameGeometry: { x: 436, y: 977, width: 873, height: 114 } });
+  const { ctx, calls } = load({ windows: [dock] });
+  ctx.sendWorkAreas();
+  const a = JSON.parse(calls.find((c) => c.method === "SetWorkAreas").payload)[0];
+  assert.deepEqual(a.panels, [{ y: 977, h: 114, reserved: 0, hidden: false, cls: "krema" }]);
 });
 
 test("invisible helper windows are never platforms", () => {

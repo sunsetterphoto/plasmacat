@@ -164,7 +164,7 @@ function sendWorkAreas() {
     const g = w.frameGeometry;
     if (w.dock && g.width > g.height) {
       docks.push({ x: g.x, y: g.y, width: g.width, height: g.height,
-                   hidden: w.hidden === true });
+                   hidden: w.hidden === true, cls: w.resourceClass || "" });
     }
   }
   const areas = [];
@@ -182,7 +182,7 @@ function sendWorkAreas() {
       if (hOverlap && atBottom && dg.y < areaBottom) {
         if (!dg.hidden) bottom = Math.min(bottom, visualFloor(areaBottom, reserved, dg));
         panels.push({ y: Math.round(dg.y), h: Math.round(dg.height),
-                      reserved: Math.round(reserved), hidden: dg.hidden });
+                      reserved: Math.round(reserved), hidden: dg.hidden, cls: dg.cls });
       }
     }
     // the app refines the floor with Plasma's panel settings (floating?
