@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — 2026-11-14
+
+### Fixed
+- **Krema dock**: cats and furniture stand on the dock's visible bar instead of
+  floating ~40 px above it. Krema is not a Plasma panel; its surface includes
+  room for the hover zoom. The bar top is now computed from `~/.config/kremarc`
+  (icon size, floating margin) with Krema's own formula and stays put while the
+  dock dodges windows.
+- 1 px screen-edge surfaces (Krema's edge probe) no longer affect the floor.
+
 ## 0.2.1 — 2026-11-10
 
 ### Added
